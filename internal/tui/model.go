@@ -52,7 +52,16 @@ func NewMainModel(db *sql.DB) MainModel {
 }
 
 func (m MainModel) Init() tea.Cmd {
-	return textinput.Blink
+	var cmds []tea.Cmd
+	cmds = append(cmds, textinput.Blink) // Keep the cursor blinking
+
+	// If we start directly in the dashboard (Day already exists),
+	// we must fire the Dashboard's Init() to start the timer.
+	if m.state == StateDashboard {
+		cmds = append(cmds, m.dashboard.Init())
+	}
+
+	return tea.Batch(cmds...)
 }
 
 func (m MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -102,8 +111,8 @@ func (m MainModel) updateInitializing(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 			// Transition state
 			m.state = StateDashboard
-			// m.dashboard = NewDashboardModel(database.CheckCurrentDay()) // Load the new day
-			return m, nil
+			m.dashboard = NewDashboardModel(m.db, database.CheckCurrentDay()) // Load the new day
+			return m, m.dashboard.Init()
 		}
 	}
 
@@ -120,7 +129,7 @@ func (m MainModel) View() string {
 	case StateInitializing:
 		return fmt.Sprintf(
 			"\n  %s\n\n  %s\n\n  %s\n",
-			"Salutations. Define your capacity.",
+			"Salutations. Define your temporeal capacity.",
 			"How many sprints will you execute today? (1-8)",
 			m.textInput.View(),
 		)

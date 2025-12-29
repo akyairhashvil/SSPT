@@ -256,3 +256,11 @@ func UpdateGoalStatus(goalID int64, status string) error {
 	_, err := DB.Exec("UPDATE goals SET status = ? WHERE id = ?", status, goalID)
 	return err
 }
+
+// ResetSprint resets a sprint's status to 'pending' and clears the start time.
+// This is used when stopping/aborting a timer.
+func ResetSprint(sprintID int64) error {
+	// We set start_time to NULL so the timer logic doesn't get confused if we restart it
+	_, err := DB.Exec("UPDATE sprints SET status = 'pending', start_time = NULL WHERE id = ?", sprintID)
+	return err
+}

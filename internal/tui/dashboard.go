@@ -16,18 +16,20 @@ import (
 
 const (
 	SprintDuration = 90 * time.Minute
-	// BreakDuration  = 30 * time.Minute // Logic placeholder for future break enforcement
+	// Column dimensions
+	ColWidth      = 26               // Fits nicely in standard terminals
+	ColOuterWidth = ColWidth + 2 + 2 // Width + Padding(1*2) + Border(1*2)
 )
 
 // --- Styles ---
 var (
-	docStyle = lipgloss.NewStyle().Margin(1, 2)
+	docStyle = lipgloss.NewStyle().Margin(1, 1)
 
 	columnStyle = lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
 			BorderForeground(lipgloss.Color("240")).
 			Padding(0, 1).
-			Width(25).
+			Width(ColWidth).
 			Height(20)
 
 	activeColumnStyle = columnStyle.Copy().
@@ -38,14 +40,16 @@ var (
 			Foreground(lipgloss.Color("205")).
 			Bold(true).
 			Align(lipgloss.Center).
-			Width(23)
+			Width(ColWidth)
 
 	goalStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("252"))
+			Foreground(lipgloss.Color("252")).
+			Width(ColWidth)
 
 	completedGoalStyle = lipgloss.NewStyle().
 				Foreground(lipgloss.Color("240")).
-				Strikethrough(true)
+				Strikethrough(true).
+				Width(ColWidth)
 
 	inputStyle = lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
@@ -72,6 +76,7 @@ type DashboardModel struct {
 	// Navigation State
 	focusedColIdx  int
 	focusedGoalIdx int
+	scrollOffset   int // Tracks left-most visible column
 
 	// Mode State
 	creatingGoal bool
@@ -102,6 +107,7 @@ func NewDashboardModel(db *sql.DB, dayID int64) DashboardModel {
 		textInput:     ti,
 		progress:      prog,
 		focusedColIdx: 1, // Default to Sprint 1
+		scrollOffset:  0,
 	}
 
 	m.refreshData(dayID)
@@ -112,14 +118,12 @@ func (m *DashboardModel) refreshData(dayID int64) {
 	day, _ := database.GetDay(dayID)
 	sprints, _ := database.GetSprints(dayID)
 
-	// Fetch goals
+	// Fetch goals & check for active sprint
 	for i := range sprints {
 		goals, _ := database.GetGoalsForSprint(sprints[i].ID)
 		sprints[i].Goals = goals
 
-		// Persistence Check: Is this sprint already active?
 		if sprints[i].Status == "active" {
-			// We found our active sprint, link the pointer
 			m.activeSprint = &sprints[i]
 		}
 	}
@@ -133,7 +137,6 @@ func (m *DashboardModel) refreshData(dayID int64) {
 }
 
 func (m DashboardModel) Init() tea.Cmd {
-	// If we found an active sprint during load, start the heartbeat immediately
 	if m.activeSprint != nil {
 		return tea.Batch(textinput.Blink, tickCmd())
 	}
@@ -159,10 +162,8 @@ func (m DashboardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 
-			// Update Progress
-			// We capture the generic model (newProg) and command (progCmd)
+			// Update Progress (Type Assertion Fix)
 			newProg, progCmd := m.progress.Update(msg)
-			// We assert that newProg is of type progress.Model
 			m.progress = newProg.(progress.Model)
 			return m, tea.Batch(progCmd, tickCmd())
 		}
@@ -209,15 +210,12 @@ func (m DashboardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Check for digits 0-8
 			if len(msg.String()) == 1 && strings.Contains("012345678", msg.String()) {
 				targetNum := int(msg.String()[0] - '0')
-
 				currentSprint := m.sprints[m.focusedColIdx]
 				if len(currentSprint.Goals) > m.focusedGoalIdx {
 					goal := currentSprint.Goals[m.focusedGoalIdx]
 
-					// Find Target ID
 					var targetID int64
 					found := false
-
 					if targetNum == 0 {
 						targetID = 0
 						found = true
@@ -244,19 +242,39 @@ func (m DashboardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	// --- NAVIGATION & COMMANDS ---
+	// --- NAVIGATION & ACTIONS ---
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		switch msg.String() {
+
+		// QUIT
+		case "q", "ctrl+c":
+			return m, tea.Quit
+
+		// NAVIGATION
 		case "tab", "right", "l":
 			if m.focusedColIdx < len(m.sprints)-1 {
 				m.focusedColIdx++
 				m.focusedGoalIdx = 0
+
+				// Viewport Scroll Right
+				maxVisibleCols := (m.width - 4) / ColOuterWidth
+				if maxVisibleCols < 1 {
+					maxVisibleCols = 1
+				}
+				if m.focusedColIdx >= m.scrollOffset+maxVisibleCols {
+					m.scrollOffset++
+				}
 			}
 		case "shift+tab", "left", "h":
 			if m.focusedColIdx > 0 {
 				m.focusedColIdx--
 				m.focusedGoalIdx = 0
+
+				// Viewport Scroll Left
+				if m.focusedColIdx < m.scrollOffset {
+					m.scrollOffset--
+				}
 			}
 		case "up", "k":
 			if m.focusedGoalIdx > 0 {
@@ -266,15 +284,19 @@ func (m DashboardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.focusedGoalIdx < len(m.sprints[m.focusedColIdx].Goals)-1 {
 				m.focusedGoalIdx++
 			}
+
+		// ACTIONS
 		case "n":
 			m.creatingGoal = true
 			m.textInput.Focus()
 			return m, nil
+
 		case "m":
 			if len(m.sprints[m.focusedColIdx].Goals) > 0 {
 				m.movingGoal = true
 			}
-		case " ": // Spacebar to Toggle Complete
+
+		case " ": // Spacebar Toggle
 			if len(m.sprints[m.focusedColIdx].Goals) > 0 {
 				goal := m.sprints[m.focusedColIdx].Goals[m.focusedGoalIdx]
 				newStatus := "completed"
@@ -284,13 +306,23 @@ func (m DashboardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				database.UpdateGoalStatus(goal.ID, newStatus)
 				m.refreshData(m.day.ID)
 			}
-		case "s": // Start Sprint
+
+		case "s": // START Timer
 			targetSprint := m.sprints[m.focusedColIdx]
 			if targetSprint.SprintNumber > 0 && m.activeSprint == nil && targetSprint.Status == "pending" {
 				database.StartSprint(targetSprint.ID)
 				m.refreshData(m.day.ID)
 				return m, tickCmd()
 			}
+
+		case "x": // STOP (Abort) Timer
+			if m.activeSprint != nil {
+				database.ResetSprint(m.activeSprint.ID)
+				m.activeSprint = nil
+				m.refreshData(m.day.ID)
+				return m, nil
+			}
+
 		case "p": // Print Report
 			GenerateReport(m.day.ID)
 			return m, tea.Quit
@@ -309,7 +341,6 @@ func (m DashboardModel) View() string {
 		if remaining < 0 {
 			remaining = 0
 		}
-
 		timeStr := fmt.Sprintf("%02d:%02d", int(remaining.Minutes()), int(remaining.Seconds())%60)
 		barView := m.progress.ViewAs(float64(elapsed) / float64(SprintDuration))
 
@@ -320,11 +351,26 @@ func (m DashboardModel) View() string {
 		timerView = "\n[ Select Sprint & Press 's' to Start ]\n"
 	}
 
-	// 2. Columns
+	// 2. Render Columns (VIEWPORT SLICING)
 	var columns []string
-	for i, sprint := range m.sprints {
+
+	availableWidth := m.width - 4
+	maxVisibleCols := availableWidth / ColOuterWidth
+	if maxVisibleCols < 1 {
+		maxVisibleCols = 1
+	}
+
+	endIdx := m.scrollOffset + maxVisibleCols
+	if endIdx > len(m.sprints) {
+		endIdx = len(m.sprints)
+	}
+	visibleSprints := m.sprints[m.scrollOffset:endIdx]
+
+	for i, sprint := range visibleSprints {
+		trueIndex := m.scrollOffset + i
+
 		style := columnStyle
-		if i == m.focusedColIdx {
+		if trueIndex == m.focusedColIdx {
 			style = activeColumnStyle
 		}
 
@@ -335,7 +381,6 @@ func (m DashboardModel) View() string {
 			title = fmt.Sprintf("SPRINT %d", sprint.SprintNumber)
 		}
 
-		// If this sprint is active, highlight header
 		if m.activeSprint != nil && sprint.ID == m.activeSprint.ID {
 			title = "▶ " + title
 		}
@@ -350,15 +395,12 @@ func (m DashboardModel) View() string {
 		} else {
 			for idx, g := range sprint.Goals {
 				prefix := fmt.Sprintf("%d. ", idx+1)
+				// Natural wrapping via lipgloss width constraint
 				desc := g.Description
-				if len(desc) > 20 {
-					desc = desc[:17] + "..."
-				}
 
 				line := fmt.Sprintf("%s%s", prefix, desc)
 
-				// Selection Logic
-				if i == m.focusedColIdx && idx == m.focusedGoalIdx {
+				if trueIndex == m.focusedColIdx && idx == m.focusedGoalIdx {
 					line = "> " + line
 					if m.movingGoal {
 						line = line + " (?)"
@@ -390,8 +432,19 @@ func (m DashboardModel) View() string {
 		footer = lipgloss.NewStyle().Foreground(lipgloss.Color("205")).Render(
 			"\n\nMove to Sprint? (0=Backlog, 1-8=Sprint #)")
 	} else {
-		footer = "\n\n[n] New | [Space] Toggle | [m] Move | [s] Start | [p] Report"
-		footer = lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Render(footer)
+		pageInfo := fmt.Sprintf(" [Cols %d-%d of %d]", m.scrollOffset+1, endIdx, len(m.sprints))
+
+		baseHelp := "[n] New | [Space] Toggle | [m] Move | "
+		var timerHelp string
+
+		if m.activeSprint != nil {
+			timerHelp = "[x] STOP Timer | "
+		} else {
+			timerHelp = "[s] Start | "
+		}
+
+		fullHelp := baseHelp + timerHelp + "[p] Report | [q] Quit" + pageInfo
+		footer = "\n\n" + lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Render(fullHelp)
 	}
 
 	return lipgloss.JoinVertical(lipgloss.Left, timerView, board, footer)
