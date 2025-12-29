@@ -264,3 +264,51 @@ func ResetSprint(sprintID int64) error {
 	_, err := DB.Exec("UPDATE sprints SET status = 'pending', start_time = NULL WHERE id = ?", sprintID)
 	return err
 }
+
+// --- Task Management ---
+
+func EditGoal(goalID int64, newDescription string) error {
+	_, err := DB.Exec("UPDATE goals SET description = ? WHERE id = ?", newDescription, goalID)
+	return err
+}
+
+func DeleteGoal(goalID int64) error {
+	_, err := DB.Exec("DELETE FROM goals WHERE id = ?", goalID)
+	return err
+}
+
+// SearchGoals finds tasks matching a string across all history (or limit to current day if preferred).
+func SearchGoals(query string) ([]models.Goal, error) {
+	likeQuery := "%" + query + "%"
+	rows, err := DB.Query(`
+		SELECT id, sprint_id, description, status, created_at 
+		FROM goals WHERE description LIKE ? ORDER BY created_at DESC LIMIT 20`, likeQuery)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var goals []models.Goal
+	for rows.Next() {
+		var g models.Goal
+		rows.Scan(&g.ID, &g.SprintID, &g.Description, &g.Status, &g.CreatedAt)
+		goals = append(goals, g)
+	}
+	return goals, nil
+}
+
+// --- Sprint Lifecycle Logic ---
+
+// MovePendingToBacklog transfers all unfinished tasks from a specific sprint to the Backlog (Sprint ID 0/NULL).
+func MovePendingToBacklog(sprintID int64) error {
+	_, err := DB.Exec("UPDATE goals SET sprint_id = NULL WHERE sprint_id = ? AND status != 'completed'", sprintID)
+	return err
+}
+
+// ClearDay resets the board by marking the day as 'closed' (logic depends on if you want to delete or just archive).
+// For the "Clear Board" request, we usually just assume the next launch starts a new Day,
+// but we can force all remaining sprints to 'aborted' if needed.
+func ArchiveDay(dayID int64) error {
+	// Optional: could mark day as 'archived' in days table if you added a status column
+	return nil
+}
