@@ -27,9 +27,11 @@ type Sprint struct {
 	ID           int64
 	DayID        int64
 	SprintNumber int
-	Status       string // pending, active, completed, interrupted
+	Status       string // pending, active, paused, completed, interrupted
 	StartTime    sql.NullTime
 	EndTime      sql.NullTime
+	LastPausedAt sql.NullTime
+	ElapsedSeconds int
 	Goals        []Goal // The tasks allocated to this sprint
 }
 
@@ -39,6 +41,16 @@ type Goal struct {
 	SprintID    sql.NullInt64 // If Valid=false, it belongs to the Backlog
 	Description string
 	Status      string // pending, completed
+	Rank        int
 	CreatedAt   time.Time
 	CompletedAt sql.NullTime
+}
+
+// JournalEntry represents a contextual note linked to a day and optionally a sprint.
+type JournalEntry struct {
+	ID        int64
+	DayID     int64
+	SprintID  sql.NullInt64
+	Content   string
+	CreatedAt time.Time
 }

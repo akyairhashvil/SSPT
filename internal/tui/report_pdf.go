@@ -59,6 +59,21 @@ func GeneratePDFReport(dayID int64) {
 	pdf.Ln(10)
 	pdf.SetFont("Arial", "B", 12)
 	pdf.Cell(0, 10, fmt.Sprintf("Total Goals Completed: %d", totalCompleted))
+	pdf.Ln(10)
+
+	// Journaling
+	entries, _ := database.GetJournalEntries(dayID)
+	if len(entries) > 0 {
+		pdf.SetFont("Arial", "B", 14)
+		pdf.Cell(0, 10, "Journal")
+		pdf.Ln(8)
+		pdf.SetFont("Arial", "", 12)
+		for _, e := range entries {
+			timeStr := e.CreatedAt.Format("15:04")
+			content := fmt.Sprintf("[%s] %s", timeStr, e.Content)
+			pdf.MultiCell(0, 8, content, "", "", false)
+		}
+	}
 
 	filename := fmt.Sprintf("report_%s.pdf", day.Date)
 	err := pdf.OutputFileAndClose(filename)
