@@ -29,6 +29,11 @@ func InitDB(filepath string) {
 
 func createTables() {
 	queries := []string{
+		`CREATE TABLE IF NOT EXISTS workspaces (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			name TEXT NOT NULL,
+			slug TEXT UNIQUE
+		);`,
 		`CREATE TABLE IF NOT EXISTS days (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			date TEXT NOT NULL UNIQUE,
@@ -47,22 +52,34 @@ func createTables() {
 		);`,
 		`CREATE TABLE IF NOT EXISTS goals (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			parent_id INTEGER,
+			workspace_id INTEGER,
 			sprint_id INTEGER,
 			description TEXT NOT NULL,
+			notes TEXT,
 			status TEXT DEFAULT 'pending',
+			priority INTEGER DEFAULT 3,
+			effort TEXT DEFAULT 'M',
+			tags TEXT,
+			links TEXT,
 			rank INTEGER DEFAULT 0,
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 			completed_at DATETIME,
-			FOREIGN KEY(sprint_id) REFERENCES sprints(id)
+			FOREIGN KEY(sprint_id) REFERENCES sprints(id),
+			FOREIGN KEY(parent_id) REFERENCES goals(id),
+			FOREIGN KEY(workspace_id) REFERENCES workspaces(id)
 		);`,
 		`CREATE TABLE IF NOT EXISTS journal_entries (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			day_id INTEGER NOT NULL,
 			sprint_id INTEGER,
+			goal_id INTEGER,
 			content TEXT NOT NULL,
+			tags TEXT,
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 			FOREIGN KEY(day_id) REFERENCES days(id),
-			FOREIGN KEY(sprint_id) REFERENCES sprints(id)
+			FOREIGN KEY(sprint_id) REFERENCES sprints(id),
+			FOREIGN KEY(goal_id) REFERENCES goals(id)
 		);`,
 	}
 
@@ -84,6 +101,69 @@ func migrate() {
 	_, _ = DB.Exec("ALTER TABLE sprints ADD COLUMN elapsed_seconds INTEGER DEFAULT 0")
 	// Add rank to goals
 	_, _ = DB.Exec("ALTER TABLE goals ADD COLUMN rank INTEGER DEFAULT 0")
+	
+	// V3 Migrations
+	// Goals
+	_, _ = DB.Exec("ALTER TABLE goals ADD COLUMN parent_id INTEGER")
+	_, _ = DB.Exec("ALTER TABLE goals ADD COLUMN workspace_id INTEGER")
+	_, _ = DB.Exec("ALTER TABLE goals ADD COLUMN notes TEXT")
+	_, _ = DB.Exec("ALTER TABLE goals ADD COLUMN priority INTEGER DEFAULT 3")
+	_, _ = DB.Exec("ALTER TABLE goals ADD COLUMN effort TEXT DEFAULT 'M'")
+	_, _ = DB.Exec("ALTER TABLE goals ADD COLUMN tags TEXT")
+	_, _ = DB.Exec("ALTER TABLE goals ADD COLUMN links TEXT")
+	
+	// Journal
+	_, _ = DB.Exec("ALTER TABLE journal_entries ADD COLUMN goal_id INTEGER")
+	_, _ = DB.Exec("ALTER TABLE journal_entries ADD COLUMN tags TEXT")
+}
+
+// ... (Rest of file) ...
+
+// GetBacklogGoals retrieves goals that are not assigned to any sprint (sprint_id IS NULL).
+func GetBacklogGoals() ([]models.Goal, error) {
+	rows, err := DB.Query(`
+		SELECT id, parent_id, description, status, rank, priority, effort, created_at 
+		FROM goals 
+		WHERE sprint_id IS NULL AND status != 'completed'
+		ORDER BY rank ASC, created_at DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var goals []models.Goal
+	for rows.Next() {
+		var g models.Goal
+		// Scan basics
+		if err := rows.Scan(&g.ID, &g.ParentID, &g.Description, &g.Status, &g.Rank, &g.Priority, &g.Effort, &g.CreatedAt); err != nil {
+			return nil, err
+		}
+		goals = append(goals, g)
+	}
+	return goals, nil
+}
+
+// GetGoalsForSprint retrieves goals for a specific sprint ID.
+func GetGoalsForSprint(sprintID int64) ([]models.Goal, error) {
+	rows, err := DB.Query(`
+		SELECT id, parent_id, sprint_id, description, status, rank, priority, effort, created_at 
+		FROM goals 
+		WHERE sprint_id = ? 
+		ORDER BY rank ASC, created_at ASC`, sprintID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var goals []models.Goal
+	for rows.Next() {
+		var g models.Goal
+		if err := rows.Scan(&g.ID, &g.ParentID, &g.SprintID, &g.Description, &g.Status, &g.Rank, &g.Priority, &g.Effort, &g.CreatedAt); err != nil {
+			return nil, err
+		}
+		goals = append(goals, g)
+	}
+	return goals, nil
 }
 
 // CheckCurrentDay returns the Day ID if it exists for the current date.
@@ -215,52 +295,6 @@ func AddGoal(description string, sprintID int64) error {
 	return err
 }
 
-// GetBacklogGoals retrieves goals that are not assigned to any sprint (sprint_id IS NULL).
-func GetBacklogGoals() ([]models.Goal, error) {
-	rows, err := DB.Query(`
-		SELECT id, description, status, rank, created_at 
-		FROM goals 
-		WHERE sprint_id IS NULL AND status != 'completed'
-		ORDER BY rank ASC, created_at DESC`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var goals []models.Goal
-	for rows.Next() {
-		var g models.Goal
-		if err := rows.Scan(&g.ID, &g.Description, &g.Status, &g.Rank, &g.CreatedAt); err != nil {
-			return nil, err
-		}
-		goals = append(goals, g)
-	}
-	return goals, nil
-}
-
-// GetGoalsForSprint retrieves goals for a specific sprint ID.
-// This is a helper to refresh data without reloading the whole day.
-func GetGoalsForSprint(sprintID int64) ([]models.Goal, error) {
-	rows, err := DB.Query(`
-		SELECT id, sprint_id, description, status, rank, created_at 
-		FROM goals 
-		WHERE sprint_id = ? 
-		ORDER BY rank ASC, created_at ASC`, sprintID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var goals []models.Goal
-	for rows.Next() {
-		var g models.Goal
-		if err := rows.Scan(&g.ID, &g.SprintID, &g.Description, &g.Status, &g.Rank, &g.CreatedAt); err != nil {
-			return nil, err
-		}
-		goals = append(goals, g)
-	}
-	return goals, nil
-}
 
 // MoveGoal updates the sprint_id of a specific goal.
 // Passing targetSprintID = 0 moves it to the Backlog (NULL).
@@ -362,13 +396,6 @@ func AppendSprint(dayID int64) error {
 
 // GetCompletedGoalsForDay retrieves all goals completed on a specific day across all sprints.
 func GetCompletedGoalsForDay(dayID int64) ([]models.Goal, error) {
-	// We join with sprints to filter by day_id, or just use the date if we want to be strict.
-	// Actually, the schema has sprint_id in goals. If sprint_id is NULL, it's backlog.
-	// But completed_at is what matters for "The Done Pile" of the day.
-	
-	// For simplicity, let's get goals that are 'completed' and belong to any sprint of this day, 
-	// OR are completed today and have no sprint_id.
-	
 	dateStr := ""
 	err := DB.QueryRow("SELECT date FROM days WHERE id = ?", dayID).Scan(&dateStr)
 	if err != nil {
@@ -376,7 +403,7 @@ func GetCompletedGoalsForDay(dayID int64) ([]models.Goal, error) {
 	}
 
 	rows, err := DB.Query(`
-		SELECT id, description, status, rank, created_at 
+		SELECT id, parent_id, description, status, rank, priority, effort, created_at 
 		FROM goals 
 		WHERE status = 'completed' 
 		AND (
@@ -392,12 +419,33 @@ func GetCompletedGoalsForDay(dayID int64) ([]models.Goal, error) {
 	var goals []models.Goal
 	for rows.Next() {
 		var g models.Goal
-		if err := rows.Scan(&g.ID, &g.Description, &g.Status, &g.Rank, &g.CreatedAt); err != nil {
+		if err := rows.Scan(&g.ID, &g.ParentID, &g.Description, &g.Status, &g.Rank, &g.Priority, &g.Effort, &g.CreatedAt); err != nil {
 			return nil, err
 		}
 		goals = append(goals, g)
 	}
 	return goals, nil
+}
+
+// AddSubtask inserts a new subtask linked to a parent goal.
+func AddSubtask(description string, parentID int64) error {
+	// Inherit sprint_id from parent
+	var sprintID sql.NullInt64
+	err := DB.QueryRow("SELECT sprint_id FROM goals WHERE id = ?", parentID).Scan(&sprintID)
+	if err != nil {
+		return err
+	}
+
+	// Calculate rank among siblings
+	var maxRank int
+	err = DB.QueryRow("SELECT COALESCE(MAX(rank), 0) FROM goals WHERE parent_id = ?", parentID).Scan(&maxRank)
+	if err != nil {
+		return err
+	}
+
+	_, err = DB.Exec(`INSERT INTO goals (description, parent_id, sprint_id, status, rank) VALUES (?, ?, ?, 'pending', ?)`,
+		description, parentID, sprintID, maxRank+1)
+	return err
 }
 
 // --- Task Management ---

@@ -67,6 +67,8 @@ type DashboardModel struct {
 	searchResults  []models.Goal
 	searchInput    textinput.Model
 
+	expandedState map[int64]bool // Tracks collapsed/expanded state of tasks
+
 	progress     progress.Model
 	activeSprint *models.Sprint
 	breakActive  bool
@@ -104,6 +106,7 @@ func NewDashboardModel(db *sql.DB, dayID int64) DashboardModel {
 		progress:          prog,
 		focusedColIdx:     1, // Start focused on Backlog (now at index 1)
 		goalScrollOffsets: make(map[int]int),
+		expandedState:     make(map[int64]bool),
 	}
 	m.refreshData(dayID)
 
@@ -129,16 +132,35 @@ func (m *DashboardModel) refreshData(dayID int64) {
 	
 	// Column 0: Completed Goals
 	completedGoals, _ := database.GetCompletedGoalsForDay(dayID)
-	fullList = append(fullList, models.Sprint{ID: -1, SprintNumber: -1, Goals: completedGoals})
+	rootCompleted := BuildHierarchy(completedGoals)
+	flatCompleted := Flatten(rootCompleted, 0, m.expandedState)
+	fullList = append(fullList, models.Sprint{ID: -1, SprintNumber: -1, Goals: flatCompleted})
 
 	// Column 1: Backlog
 	backlogGoals, _ := database.GetBacklogGoals()
-	fullList = append(fullList, models.Sprint{ID: 0, SprintNumber: 0, Goals: backlogGoals})
+	rootBacklog := BuildHierarchy(backlogGoals)
+	var activeBacklog []models.Goal
+	for _, g := range rootBacklog {
+		if g.Status != "completed" {
+			activeBacklog = append(activeBacklog, g)
+		}
+	}
+	flatBacklog := Flatten(activeBacklog, 0, m.expandedState)
+	fullList = append(fullList, models.Sprint{ID: 0, SprintNumber: 0, Goals: flatBacklog})
 
 	m.activeSprint = nil
 	for i := range rawSprints {
 		goals, _ := database.GetGoalsForSprint(rawSprints[i].ID)
-		rawSprints[i].Goals = goals
+		rootGoals := BuildHierarchy(goals)
+		var activeRoots []models.Goal
+		for _, g := range rootGoals {
+			if g.Status != "completed" {
+				activeRoots = append(activeRoots, g)
+			}
+		}
+		flatGoals := Flatten(activeRoots, 0, m.expandedState)
+		
+		rawSprints[i].Goals = flatGoals
 		fullList = append(fullList, rawSprints[i])
 	}
 
@@ -155,6 +177,7 @@ func (m *DashboardModel) refreshData(dayID int64) {
 		}
 	}
 }
+
 
 func (m DashboardModel) Init() tea.Cmd {
 	if m.activeSprint != nil || m.breakActive {
@@ -240,13 +263,22 @@ func (m DashboardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						if m.editingGoal {
 							database.EditGoal(m.editingGoalID, text)
 						} else {
-							targetSprint := m.sprints[m.focusedColIdx]
-							database.AddGoal(text, targetSprint.ID)
+							// creatingGoal is true
+							if m.editingGoalID > 0 {
+								// Subtask creation mode (Parent ID stored in editingGoalID)
+								database.AddSubtask(text, m.editingGoalID)
+								// Expand parent so we see the new child
+								m.expandedState[m.editingGoalID] = true
+							} else {
+								targetSprint := m.sprints[m.focusedColIdx]
+								database.AddGoal(text, targetSprint.ID)
+							}
 						}
 						m.refreshData(m.day.ID)
 					}
 					m.creatingGoal = false
 					m.editingGoal = false
+					m.editingGoalID = 0
 					m.textInput.Reset()
 				}
 				return m, nil
@@ -446,6 +478,49 @@ func (m DashboardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.textInput.Focus()
 			return m, nil
 
+		case "N": // Shift+n
+			if m.focusedColIdx == 0 { return m, nil }
+			currentSprint := m.sprints[m.focusedColIdx]
+			if len(currentSprint.Goals) > m.focusedGoalIdx {
+				parent := currentSprint.Goals[m.focusedGoalIdx]
+				m.creatingGoal = true
+				m.editingGoalID = parent.ID // Hack: store parent ID here temporarily or add new field
+				// Better to use a specific flag or field.
+				// But creatingGoal is boolean.
+				// I'll add a 'parentID' field to DashboardModel if needed, 
+				// OR just use editingGoalID as "ContextID" since I'm not editing.
+				// Let's use a new state: creatingSubtask
+				// I'll add `creatingSubtask bool` and `parentGoalID int64` to struct later?
+				// For now, I'll piggyback.
+				// Wait, I can't easily change struct in REPLACE without replacing whole struct def.
+				// I'll assume I can use `editingGoalID` as "ParentID" when `creatingGoal` is true.
+				// But `creatingGoal` usually implies "New Root".
+				// I need to distinguish "New Root" vs "New Child".
+				// I'll use `movingGoal` as a flag? No.
+				// I'll add `creatingSubtask` bool to DashboardModel in a separate step if I can.
+				// Or... I can check `editingGoalID` != 0 when `creatingGoal` is true.
+				// Normally `creatingGoal` -> `AddGoal(text, sprintID)`.
+				// If I set `editingGoalID` to parentID, I can check that.
+				m.editingGoalID = parent.ID
+				m.textInput.Placeholder = "New Subtask..."
+				m.textInput.Focus()
+				return m, nil
+			}
+
+		case "z":
+			currentSprint := m.sprints[m.focusedColIdx]
+			if len(currentSprint.Goals) > m.focusedGoalIdx {
+				target := currentSprint.Goals[m.focusedGoalIdx]
+				// Toggle in map
+				if m.expandedState[target.ID] {
+					delete(m.expandedState, target.ID)
+				} else {
+					m.expandedState[target.ID] = true
+				}
+				m.refreshData(m.day.ID)
+			}
+			return m, nil
+
 		case "ctrl+j":
 			m.journaling = true
 			m.journalInput.Focus()
@@ -487,12 +562,26 @@ func (m DashboardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case " ":
 			if len(m.sprints[m.focusedColIdx].Goals) > m.focusedGoalIdx {
 				goal := m.sprints[m.focusedColIdx].Goals[m.focusedGoalIdx]
-				newStatus := "pending"
+				
+				// Block completion if subtasks are pending
+				canToggle := true
 				if goal.Status == "pending" {
-					newStatus = "completed"
+					for _, sub := range goal.Subtasks {
+						if sub.Status != "completed" {
+							canToggle = false
+							break
+						}
+					}
 				}
-				database.UpdateGoalStatus(goal.ID, newStatus)
-				m.refreshData(m.day.ID)
+
+				if canToggle {
+					newStatus := "pending"
+					if goal.Status == "pending" {
+						newStatus = "completed"
+					}
+					database.UpdateGoalStatus(goal.ID, newStatus)
+					m.refreshData(m.day.ID)
+				}
 			}
 
 		case "s":
@@ -598,14 +687,14 @@ func (m DashboardModel) View() string {
 		footer = lipgloss.NewStyle().Foreground(lipgloss.Color("205")).Render(
 			"\n\nMOVE TO: [0] Backlog | [1-8] Sprint # | [Esc] Cancel")
 	} else {
-		baseHelp := "[n] New | [e] Edit | [d] Delete | [Space] Toggle | [m] Move | [/] Search | [Shift+Up/Down] Rank | [Ctrl+J] Journal | "
+		baseHelp := "[n] New | [Shift+N] Subtask | [e] Edit | [d] Delete | [z] Toggle | [Space] Status | [m] Move | [/] Search | [Ctrl+J] Journal | "
 		var timerHelp string
 		if m.activeSprint != nil {
-			timerHelp = "[s] PAUSE Timer | [x] STOP Timer | "
+			timerHelp = "[s] PAUSE | [x] STOP | "
 		} else {
 			timerHelp = "[s] Start | "
 		}
-		fullHelp := baseHelp + timerHelp + "[+] Add Sprint | [Ctrl+R] Report | [q] Quit"
+		fullHelp := baseHelp + timerHelp + "[Ctrl+R] Report | [q] Quit"
 		footer = "\n\n" + lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Render(fullHelp)
 	}
 
@@ -789,7 +878,22 @@ func (m DashboardModel) View() string {
 		} else {
 			for j := scrollStart; j < len(sprint.Goals); j++ {
 				g := sprint.Goals[j]
-				prefix := fmt.Sprintf("%d. ", j+1)
+				
+				// Visual Hierarchy
+				indent := strings.Repeat("  ", g.Level)
+				icon := "• "
+				// We check if this goal was originally a parent. 
+				// Since we flat-mapped, we can check if it has subtasks populated.
+				// Note: 'g' is a value copy from the slice.
+				if len(g.Subtasks) > 0 {
+					if g.Expanded {
+						icon = "▼ "
+					} else {
+						icon = "▶ "
+					}
+				}
+				
+				prefix := fmt.Sprintf("%s%s", indent, icon)
 
 				rawLine := fmt.Sprintf("%s%s", prefix, g.Description)
 				var styledLine string

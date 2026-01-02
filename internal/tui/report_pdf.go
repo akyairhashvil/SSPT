@@ -24,6 +24,8 @@ func GeneratePDFReport(dayID int64) {
 
 	for _, s := range sprints {
 		goals, _ := database.GetGoalsForSprint(s.ID)
+		rootGoals := BuildHierarchy(goals)
+		flatGoals := Flatten(rootGoals, 0, nil)
 
 		// Header
 		pdf.SetFont("Arial", "B", 14)
@@ -38,18 +40,22 @@ func GeneratePDFReport(dayID int64) {
 
 		// Goals
 		pdf.SetFont("Arial", "", 12)
-		if len(goals) == 0 {
+		if len(flatGoals) == 0 {
 			pdf.Cell(0, 8, "  - No goals assigned.")
 			pdf.Ln(8)
 		}
 
-		for _, g := range goals {
+		for _, g := range flatGoals {
 			status := "[ ]"
 			if g.Status == "completed" {
 				status = "[x]"
 				totalCompleted++
 			}
-			pdf.Cell(0, 8, fmt.Sprintf("  %s %s", status, g.Description))
+			indent := ""
+			for k := 0; k < g.Level; k++ {
+				indent += "    "
+			}
+			pdf.Cell(0, 8, fmt.Sprintf("%s  %s %s", indent, status, g.Description))
 			pdf.Ln(6)
 		}
 		pdf.Ln(4)

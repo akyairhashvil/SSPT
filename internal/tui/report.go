@@ -37,6 +37,8 @@ func GenerateReport(dayID int64) {
 	// Iterate Sprints
 	for _, s := range sprints {
 		goals, _ := database.GetGoalsForSprint(s.ID)
+		rootGoals := BuildHierarchy(goals)
+		flatGoals := Flatten(rootGoals, 0, nil) // Expand all
 
 		timeRange := "Pending"
 		if s.StartTime.Valid {
@@ -50,18 +52,22 @@ func GenerateReport(dayID int64) {
 
 		f.WriteString(fmt.Sprintf("## Sprint %d (%s)\n", s.SprintNumber, timeRange))
 
-		if len(goals) == 0 {
+		if len(flatGoals) == 0 {
 			f.WriteString("*No goals assigned.*\n")
 		}
 
-		for _, g := range goals {
+		for _, g := range flatGoals {
 			totalGoals++
 			check := "[ ]"
 			if g.Status == "completed" {
 				check = "[x]"
 				totalCompleted++
 			}
-			f.WriteString(fmt.Sprintf("- %s %s\n", check, g.Description))
+			indent := ""
+			if g.Level > 0 {
+				indent = "    " // Markdown indent
+			}
+			f.WriteString(fmt.Sprintf("%s- %s %s\n", indent, check, g.Description))
 		}
 		f.WriteString("\n")
 	}
