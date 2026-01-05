@@ -43,9 +43,6 @@ The project is built in **Go** and utilizes the following core technologies:
 
 We welcome contributions that align with the core philosophy of "Frictionless Flow". 
 
-### Roadmap
-Please consult **`GEMINI.md`** in the root directory. This file serves as the strategic roadmap and "living specification" for the project. All major architectural decisions and phases are documented there.
-
 ### Guidelines
 1.  **Conventions:** Adhere strictly to the existing project structure and Go coding conventions.
 2.  **Database:** If your change requires schema modifications, ensure you update the migration logic in `internal/database/db.go`.
@@ -54,4 +51,4 @@ Please consult **`GEMINI.md`** in the root directory. This file serves as the st
 
 ## License
 
-This project is licensed under the terms of the MIT license.
+This project is licensed under the terms of the GNU General Public License v3.0 (GPLv3).
