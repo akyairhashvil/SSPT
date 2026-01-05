@@ -1,2 +1,8 @@
-MVP Design: Li Ben Ming
-Developer: Gemini 3 Pro
+MVP Design:
+  - Li Ben Ming
+  - ChatGPT
+  - Grok
+  
+Development:
+  - Google gemini-cli
+  - OpenAI Codex
