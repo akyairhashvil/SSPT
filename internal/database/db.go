@@ -510,13 +510,13 @@ func DeleteGoal(goalID int64) error {
 
 // AddTagsToGoal appends new tags to a goal, avoiding duplicates.
 func AddTagsToGoal(goalID int64, tagsToAdd []string) error {
-	var currentTagsJSON string
+	var currentTagsJSON sql.NullString
 	err := DB.QueryRow("SELECT tags FROM goals WHERE id = ?", goalID).Scan(&currentTagsJSON)
 	if err != nil {
 		return err
 	}
 
-	currentTags := util.JSONToTags(currentTagsJSON)
+	currentTags := util.JSONToTags(currentTagsJSON.String)
 	tagSet := make(map[string]bool)
 	for _, t := range currentTags {
 		tagSet[t] = true
@@ -535,30 +535,42 @@ func AddTagsToGoal(goalID int64, tagsToAdd []string) error {
 	return err
 }
 
-func SearchGoals(query string) ([]models.Goal, error) {
-	likeQuery := "%" + query + "%"
-	rows, err := DB.Query(`
-		SELECT id, sprint_id, description, status, created_at 
-		FROM goals WHERE description LIKE ? ORDER BY created_at DESC LIMIT 20`, likeQuery)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
+// Search performs a dynamic search on goals based on structured query filters and workspace isolation.
+func Search(query util.SearchQuery, workspaceID int64) ([]models.Goal, error) {
+	var args []interface{}
+	sql := `SELECT id, parent_id, sprint_id, description, status, rank, priority, effort, tags, created_at 
+	        FROM goals WHERE workspace_id = ?`
+	args = append(args, workspaceID)
 
-	var goals []models.Goal
-	for rows.Next() {
-		var g models.Goal
-		rows.Scan(&g.ID, &g.SprintID, &g.Description, &g.Status, &g.CreatedAt)
-		goals = append(goals, g)
+	if len(query.Tags) > 0 {
+		for _, tag := range query.Tags {
+			sql += ` AND EXISTS (SELECT 1 FROM json_each(COALESCE(tags, '[]')) WHERE value = ?)`
+			args = append(args, tag)
+		}
 	}
-	return goals, nil
+
+	if len(query.Status) > 0 {
+		placeholders := strings.Repeat(",?", len(query.Status)-1)
+		sql += fmt.Sprintf(` AND status IN (?%s)`, placeholders)
+		for _, s := range query.Status {
+			args = append(args, s)
+		}
+	}
+
+	if len(query.Text) > 0 {
+		for _, text := range query.Text {
+			sql += ` AND description LIKE ?`
+			args = append(args, "%"+text+"%")
+		}
+	}
+
+	sql += " ORDER BY created_at DESC LIMIT 50"
+
+	return scanGoals(sql, args...)
 }
 
-func GetAllGoals() ([]models.Goal, error) {
-	rows, err := DB.Query(`
-		SELECT id, parent_id, sprint_id, description, status, rank, priority, effort, tags, created_at 
-		FROM goals 
-		ORDER BY rank ASC, created_at ASC`)
+func scanGoals(query string, args ...interface{}) ([]models.Goal, error) {
+	rows, err := DB.Query(query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -573,6 +585,13 @@ func GetAllGoals() ([]models.Goal, error) {
 		goals = append(goals, g)
 	}
 	return goals, nil
+}
+
+func GetAllGoals() ([]models.Goal, error) {
+	return scanGoals(`
+		SELECT id, parent_id, sprint_id, description, status, rank, priority, effort, tags, created_at 
+		FROM goals 
+		ORDER BY rank ASC, created_at ASC`)
 }
 
 func MovePendingToBacklog(sprintID int64) error {

@@ -50,12 +50,12 @@ type Goal struct {
 	WorkspaceID sql.NullInt64 // For Multi-tenancy
 	SprintID    sql.NullInt64 // If Valid=false, it belongs to the Backlog
 	Description string
-	Notes       string
+	Notes       sql.NullString
 	Status      string // open, done, blocked, waiting, archived
 	Priority    int    // 1=High, 3=Low
-	Effort      string // S, M, L
-	Tags        string // JSON array
-	Links       string // JSON array
+	Effort      sql.NullString // S, M, L
+	Tags        sql.NullString // JSON array
+	Links       sql.NullString // JSON array
 	Rank        int
 	CreatedAt   time.Time
 	CompletedAt sql.NullTime
@@ -74,6 +74,6 @@ type JournalEntry struct {
 	SprintID    sql.NullInt64
 	GoalID      sql.NullInt64 // Context link to specific task
 	Content     string
-	Tags        string // JSON array
+	Tags        sql.NullString // JSON array
 	CreatedAt   time.Time
 }
