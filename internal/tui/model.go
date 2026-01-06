@@ -104,7 +104,8 @@ func (m MainModel) updateInitializing(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 			// EXECUTE THE BOOTSTRAP
-			if err := database.BootstrapDay(numSprints); err != nil {
+			wsID, _ := database.EnsureDefaultWorkspace()
+			if err := database.BootstrapDay(wsID, numSprints); err != nil {
 				m.err = err
 				return m, nil
 			}

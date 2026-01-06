@@ -33,6 +33,7 @@ type Workspace struct {
 type Sprint struct {
 	ID           int64
 	DayID        int64
+	WorkspaceID  sql.NullInt64
 	SprintNumber int
 	Status       string // pending, active, paused, completed, interrupted
 	StartTime    sql.NullTime
@@ -58,20 +59,21 @@ type Goal struct {
 	Rank        int
 	CreatedAt   time.Time
 	CompletedAt sql.NullTime
-	
+
 	// UI Helper fields (not in DB)
-	Subtasks    []Goal
-	Expanded    bool
-	Level       int // Indentation level
+	Subtasks []Goal
+	Expanded bool
+	Level    int // Indentation level
 }
 
 // JournalEntry represents a contextual note linked to a day and optionally a sprint.
 type JournalEntry struct {
-	ID        int64
-	DayID     int64
-	SprintID  sql.NullInt64
-	GoalID    sql.NullInt64 // Context link to specific task
-	Content   string
-	Tags      string // JSON array
-	CreatedAt time.Time
+	ID          int64
+	DayID       int64
+	WorkspaceID sql.NullInt64
+	SprintID    sql.NullInt64
+	GoalID      sql.NullInt64 // Context link to specific task
+	Content     string
+	Tags        string // JSON array
+	CreatedAt   time.Time
 }

@@ -6,12 +6,13 @@ import (
 	"path/filepath"
 
 	"github.com/akyairhashvil/SSPT/internal/database"
+	"github.com/akyairhashvil/SSPT/internal/models"
 )
 
 // GenerateReport creates a markdown summary of the day's activity.
-func GenerateReport(dayID int64) {
+func GenerateReport(dayID int64, workspaceID int64) {
 	day, _ := database.GetDay(dayID)
-	sprints, _ := database.GetSprints(dayID)
+	sprints, _ := database.GetSprints(dayID, workspaceID)
 
 	// Ensure we have a data directory or just save to root
 	filename := fmt.Sprintf("productivity_%s.md", day.Date)
@@ -34,11 +35,35 @@ func GenerateReport(dayID int64) {
 	totalCompleted := 0
 	totalGoals := 0
 
+	// Fetch ALL goals to build complete context
+	allGoals, _ := database.GetAllGoals()
+	masterTree := BuildHierarchy(allGoals)
+
+	// Helper to check relevancy
+	var isRelevant func(g models.Goal, sprintID int64) bool
+	isRelevant = func(g models.Goal, sprintID int64) bool {
+		if g.SprintID.Valid && g.SprintID.Int64 == sprintID {
+			return true
+		}
+		for _, sub := range g.Subtasks {
+			if isRelevant(sub, sprintID) {
+				return true
+			}
+		}
+		return false
+	}
+
 	// Iterate Sprints
 	for _, s := range sprints {
-		goals, _ := database.GetGoalsForSprint(s.ID)
-		rootGoals := BuildHierarchy(goals)
-		flatGoals := Flatten(rootGoals, 0, nil) // Expand all
+		// Filter MasterTree for this sprint
+		var relevantRoots []models.Goal
+		for _, root := range masterTree {
+			if isRelevant(root, s.ID) {
+				relevantRoots = append(relevantRoots, root)
+			}
+		}
+		
+		flatGoals := Flatten(relevantRoots, 0, nil) // Expand all
 
 		timeRange := "Pending"
 		if s.StartTime.Valid {
@@ -86,7 +111,7 @@ func GenerateReport(dayID int64) {
 	f.WriteString("\n")
 
 	// Journal
-	entries, _ := database.GetJournalEntries(dayID)
+	entries, _ := database.GetJournalEntries(dayID, workspaceID)
 	if len(entries) > 0 {
 		f.WriteString("## Journal\n\n")
 		for _, e := range entries {

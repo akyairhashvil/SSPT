@@ -4,9 +4,11 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
+	"strings"
 	"time"
 
 	"github.com/akyairhashvil/SSPT/internal/models"
+	"github.com/akyairhashvil/SSPT/internal/util"
 	_ "github.com/mattn/go-sqlite3"
 )
 
@@ -42,13 +44,15 @@ func createTables() {
 		`CREATE TABLE IF NOT EXISTS sprints (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			day_id INTEGER NOT NULL,
+			workspace_id INTEGER,
 			sprint_number INTEGER NOT NULL,
 			status TEXT DEFAULT 'pending',
 			start_time DATETIME,
 			end_time DATETIME,
 			last_paused_at DATETIME,
 			elapsed_seconds INTEGER DEFAULT 0,
-			FOREIGN KEY(day_id) REFERENCES days(id)
+			FOREIGN KEY(day_id) REFERENCES days(id),
+			FOREIGN KEY(workspace_id) REFERENCES workspaces(id)
 		);`,
 		`CREATE TABLE IF NOT EXISTS goals (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -72,12 +76,14 @@ func createTables() {
 		`CREATE TABLE IF NOT EXISTS journal_entries (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			day_id INTEGER NOT NULL,
+			workspace_id INTEGER,
 			sprint_id INTEGER,
 			goal_id INTEGER,
 			content TEXT NOT NULL,
 			tags TEXT,
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 			FOREIGN KEY(day_id) REFERENCES days(id),
+			FOREIGN KEY(workspace_id) REFERENCES workspaces(id),
 			FOREIGN KEY(sprint_id) REFERENCES sprints(id),
 			FOREIGN KEY(goal_id) REFERENCES goals(id)
 		);`,
@@ -112,59 +118,57 @@ func migrate() {
 	_, _ = DB.Exec("ALTER TABLE goals ADD COLUMN tags TEXT")
 	_, _ = DB.Exec("ALTER TABLE goals ADD COLUMN links TEXT")
 	
+	// Sprints
+	_, _ = DB.Exec("ALTER TABLE sprints ADD COLUMN workspace_id INTEGER")
+
 	// Journal
 	_, _ = DB.Exec("ALTER TABLE journal_entries ADD COLUMN goal_id INTEGER")
 	_, _ = DB.Exec("ALTER TABLE journal_entries ADD COLUMN tags TEXT")
+	_, _ = DB.Exec("ALTER TABLE journal_entries ADD COLUMN workspace_id INTEGER")
 }
 
-// ... (Rest of file) ...
+// --- Workspaces ---
 
-// GetBacklogGoals retrieves goals that are not assigned to any sprint (sprint_id IS NULL).
-func GetBacklogGoals() ([]models.Goal, error) {
-	rows, err := DB.Query(`
-		SELECT id, parent_id, description, status, rank, priority, effort, created_at 
-		FROM goals 
-		WHERE sprint_id IS NULL AND status != 'completed'
-		ORDER BY rank ASC, created_at DESC`)
+func GetWorkspaces() ([]models.Workspace, error) {
+	rows, err := DB.Query("SELECT id, name, slug FROM workspaces ORDER BY id ASC")
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 
-	var goals []models.Goal
+	var ws []models.Workspace
 	for rows.Next() {
-		var g models.Goal
-		// Scan basics
-		if err := rows.Scan(&g.ID, &g.ParentID, &g.Description, &g.Status, &g.Rank, &g.Priority, &g.Effort, &g.CreatedAt); err != nil {
+		var w models.Workspace
+		if err := rows.Scan(&w.ID, &w.Name, &w.Slug); err != nil {
 			return nil, err
 		}
-		goals = append(goals, g)
+		ws = append(ws, w)
 	}
-	return goals, nil
+	return ws, nil
 }
 
-// GetGoalsForSprint retrieves goals for a specific sprint ID.
-func GetGoalsForSprint(sprintID int64) ([]models.Goal, error) {
-	rows, err := DB.Query(`
-		SELECT id, parent_id, sprint_id, description, status, rank, priority, effort, created_at 
-		FROM goals 
-		WHERE sprint_id = ? 
-		ORDER BY rank ASC, created_at ASC`, sprintID)
+func EnsureDefaultWorkspace() (int64, error) {
+	var id int64
+	err := DB.QueryRow("SELECT id FROM workspaces WHERE slug = 'personal'").Scan(&id)
+	if err == sql.ErrNoRows {
+		res, err := DB.Exec("INSERT INTO workspaces (name, slug) VALUES ('Personal', 'personal')")
+		if err != nil {
+			return 0, err
+		}
+		return res.LastInsertId()
+	}
+	return id, err
+}
+
+func CreateWorkspace(name, slug string) (int64, error) {
+	res, err := DB.Exec("INSERT INTO workspaces (name, slug) VALUES (?, ?)", name, slug)
 	if err != nil {
-		return nil, err
+		return 0, err
 	}
-	defer rows.Close()
-
-	var goals []models.Goal
-	for rows.Next() {
-		var g models.Goal
-		if err := rows.Scan(&g.ID, &g.ParentID, &g.SprintID, &g.Description, &g.Status, &g.Rank, &g.Priority, &g.Effort, &g.CreatedAt); err != nil {
-			return nil, err
-		}
-		goals = append(goals, g)
-	}
-	return goals, nil
+	return res.LastInsertId()
 }
+
+// --- Day / Sprint Management ---
 
 // CheckCurrentDay returns the Day ID if it exists for the current date.
 func CheckCurrentDay() int64 {
@@ -180,27 +184,28 @@ func CheckCurrentDay() int64 {
 	return id
 }
 
-// BootstrapDay creates the day record and pre-allocates the chosen number of sprints.
-func BootstrapDay(numSprints int) error {
+// BootstrapDay creates the day record and pre-allocates the chosen number of sprints for a workspace.
+func BootstrapDay(workspaceID int64, numSprints int) error {
 	tx, err := DB.Begin()
 	if err != nil {
 		return err
 	}
 
 	dateStr := time.Now().Format("2006-01-02")
-	res, err := tx.Exec("INSERT INTO days (date) VALUES (?)", dateStr)
+	_, err = tx.Exec("INSERT OR IGNORE INTO days (date) VALUES (?)", dateStr)
 	if err != nil {
 		tx.Rollback()
-		return fmt.Errorf("failed to insert day: %w", err)
+		return fmt.Errorf("failed to ensure day: %w", err)
 	}
 
-	dayID, err := res.LastInsertId()
+	var dayID int64
+	err = tx.QueryRow("SELECT id FROM days WHERE date = ?", dateStr).Scan(&dayID)
 	if err != nil {
 		tx.Rollback()
 		return err
 	}
 
-	stmt, err := tx.Prepare("INSERT INTO sprints (day_id, sprint_number) VALUES (?, ?)")
+	stmt, err := tx.Prepare("INSERT INTO sprints (day_id, workspace_id, sprint_number) VALUES (?, ?, ?)")
 	if err != nil {
 		tx.Rollback()
 		return err
@@ -208,7 +213,7 @@ func BootstrapDay(numSprints int) error {
 	defer stmt.Close()
 
 	for i := 1; i <= numSprints; i++ {
-		_, err = stmt.Exec(dayID, i)
+		_, err = stmt.Exec(dayID, workspaceID, i)
 		if err != nil {
 			tx.Rollback()
 			return fmt.Errorf("failed to insert sprint %d: %w", i, err)
@@ -233,13 +238,13 @@ func GetDay(id int64) (models.Day, error) {
 	return d, nil
 }
 
-// GetSprints retrieves all sprints for a given day, ordered by number.
-func GetSprints(dayID int64) ([]models.Sprint, error) {
+// GetSprints retrieves all sprints for a given day and workspace, ordered by number.
+func GetSprints(dayID int64, workspaceID int64) ([]models.Sprint, error) {
 	rows, err := DB.Query(`
-		SELECT id, day_id, sprint_number, status, start_time, end_time, last_paused_at, elapsed_seconds
+		SELECT id, day_id, workspace_id, sprint_number, status, start_time, end_time, last_paused_at, elapsed_seconds
 		FROM sprints 
-		WHERE day_id = ? 
-		ORDER BY sprint_number ASC`, dayID)
+		WHERE day_id = ? AND workspace_id = ?
+		ORDER BY sprint_number ASC`, dayID, workspaceID)
 
 	if err != nil {
 		return nil, err
@@ -249,10 +254,10 @@ func GetSprints(dayID int64) ([]models.Sprint, error) {
 	var sprints []models.Sprint
 	for rows.Next() {
 		var s models.Sprint
-		// We use NullTime to handle potential NULLs in the database gracefully
 		err := rows.Scan(
 			&s.ID,
 			&s.DayID,
+			&s.WorkspaceID,
 			&s.SprintNumber,
 			&s.Status,
 			&s.StartTime,
@@ -268,21 +273,69 @@ func GetSprints(dayID int64) ([]models.Sprint, error) {
 	return sprints, nil
 }
 
+// --- Goals (Tasks) ---
+
+// GetBacklogGoals retrieves goals that are not assigned to any sprint and belong to the workspace.
+func GetBacklogGoals(workspaceID int64) ([]models.Goal, error) {
+	rows, err := DB.Query(`
+		SELECT id, parent_id, description, status, rank, priority, effort, tags, created_at 
+		FROM goals 
+		WHERE sprint_id IS NULL AND status != 'completed' AND workspace_id = ?
+		ORDER BY rank ASC, created_at DESC`, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var goals []models.Goal
+	for rows.Next() {
+		var g models.Goal
+		if err := rows.Scan(&g.ID, &g.ParentID, &g.Description, &g.Status, &g.Rank, &g.Priority, &g.Effort, &g.Tags, &g.CreatedAt); err != nil {
+			return nil, err
+		}
+		goals = append(goals, g)
+	}
+	return goals, nil
+}
+
+// GetGoalsForSprint retrieves goals for a specific sprint ID.
+func GetGoalsForSprint(sprintID int64) ([]models.Goal, error) {
+	rows, err := DB.Query(`
+		SELECT id, parent_id, sprint_id, description, status, rank, priority, effort, tags, created_at 
+		FROM goals 
+		WHERE sprint_id = ? 
+		ORDER BY rank ASC, created_at ASC`, sprintID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var goals []models.Goal
+	for rows.Next() {
+		var g models.Goal
+		if err := rows.Scan(&g.ID, &g.ParentID, &g.SprintID, &g.Description, &g.Status, &g.Rank, &g.Priority, &g.Effort, &g.Tags, &g.CreatedAt); err != nil {
+			return nil, err
+		}
+		goals = append(goals, g)
+	}
+	return goals, nil
+}
+
 // AddGoal inserts a new goal into the database.
-// If sprintID is 0, it is treated as a Backlog item (NULL in DB).
-func AddGoal(description string, sprintID int64) error {
+func AddGoal(workspaceID int64, description string, sprintID int64) error {
 	var maxRank int
 	var err error
 	if sprintID > 0 {
 		err = DB.QueryRow("SELECT COALESCE(MAX(rank), 0) FROM goals WHERE sprint_id = ?", sprintID).Scan(&maxRank)
 	} else {
-		err = DB.QueryRow("SELECT COALESCE(MAX(rank), 0) FROM goals WHERE sprint_id IS NULL").Scan(&maxRank)
+		err = DB.QueryRow("SELECT COALESCE(MAX(rank), 0) FROM goals WHERE sprint_id IS NULL AND workspace_id = ?", workspaceID).Scan(&maxRank)
 	}
 	if err != nil {
 		return err
 	}
 
-	query := `INSERT INTO goals (description, sprint_id, status, rank) VALUES (?, ?, 'pending', ?)`
+	tags := util.TagsToJSON(util.ExtractTags(description))
+	query := `INSERT INTO goals (workspace_id, description, sprint_id, status, rank, tags) VALUES (?, ?, ?, 'pending', ?, ?)`
 
 	var sprintIDArg interface{}
 	if sprintID > 0 {
@@ -291,32 +344,73 @@ func AddGoal(description string, sprintID int64) error {
 		sprintIDArg = nil // SQL NULL
 	}
 
-	_, err = DB.Exec(query, description, sprintIDArg, maxRank+1)
+	_, err = DB.Exec(query, workspaceID, description, sprintIDArg, maxRank+1, tags)
 	return err
 }
 
-
-// MoveGoal updates the sprint_id of a specific goal.
-// Passing targetSprintID = 0 moves it to the Backlog (NULL).
-func MoveGoal(goalID int64, targetSprintID int64) error {
-	var sprintArg interface{}
-	if targetSprintID == 0 {
-		sprintArg = nil // SQL NULL for Backlog
-	} else {
-		sprintArg = targetSprintID
+// GetCompletedGoalsForDay retrieves all goals completed on a specific day and workspace across all sprints.
+func GetCompletedGoalsForDay(dayID int64, workspaceID int64) ([]models.Goal, error) {
+	dateStr := ""
+	err := DB.QueryRow("SELECT date FROM days WHERE id = ?", dayID).Scan(&dateStr)
+	if err != nil {
+		return nil, err
 	}
 
-	_, err := DB.Exec("UPDATE goals SET sprint_id = ? WHERE id = ?", sprintArg, goalID)
+	rows, err := DB.Query(`
+		SELECT id, parent_id, description, status, rank, priority, effort, tags, created_at 
+		FROM goals 
+		WHERE status = 'completed' AND workspace_id = ?
+		AND (
+			sprint_id IN (SELECT id FROM sprints WHERE day_id = ?)
+			OR (sprint_id IS NULL AND strftime('%Y-%m-%d', completed_at) = ?)
+		)
+		ORDER BY completed_at DESC`, workspaceID, dayID, dateStr)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var goals []models.Goal
+	for rows.Next() {
+		var g models.Goal
+		if err := rows.Scan(&g.ID, &g.ParentID, &g.Description, &g.Status, &g.Rank, &g.Priority, &g.Effort, &g.Tags, &g.CreatedAt); err != nil {
+			return nil, err
+		}
+		goals = append(goals, g)
+	}
+	return goals, nil
+}
+
+// AddSubtask inserts a new subtask linked to a parent goal.
+func AddSubtask(description string, parentID int64) error {
+	// Inherit sprint_id and workspace_id from parent
+	var sprintID sql.NullInt64
+	var workspaceID sql.NullInt64
+	err := DB.QueryRow("SELECT sprint_id, workspace_id FROM goals WHERE id = ?", parentID).Scan(&sprintID, &workspaceID)
+	if err != nil {
+		return err
+	}
+
+	// Calculate rank among siblings
+	var maxRank int
+	err = DB.QueryRow("SELECT COALESCE(MAX(rank), 0) FROM goals WHERE parent_id = ?", parentID).Scan(&maxRank)
+	if err != nil {
+		return err
+	}
+
+	tags := util.TagsToJSON(util.ExtractTags(description))
+	_, err = DB.Exec(`INSERT INTO goals (description, parent_id, sprint_id, workspace_id, status, rank, tags) VALUES (?, ?, ?, ?, 'pending', ?, ?)`,
+		description, parentID, sprintID, workspaceID, maxRank+1, tags)
 	return err
 }
 
-// StartSprint marks a sprint as active and records the current timestamp.
+// --- Sprint Lifecycle ---
+
 func StartSprint(sprintID int64) error {
 	_, err := DB.Exec("UPDATE sprints SET status = 'active', start_time = CURRENT_TIMESTAMP WHERE id = ?", sprintID)
 	return err
 }
 
-// PauseSprint saves the elapsed time and marks the sprint as paused.
 func PauseSprint(sprintID int64, elapsedSeconds int) error {
 	_, err := DB.Exec(`
 		UPDATE sprints 
@@ -327,13 +421,18 @@ func PauseSprint(sprintID int64, elapsedSeconds int) error {
 	return err
 }
 
-// CompleteSprint marks a sprint as finished.
 func CompleteSprint(sprintID int64) error {
 	_, err := DB.Exec("UPDATE sprints SET status = 'completed', end_time = CURRENT_TIMESTAMP WHERE id = ?", sprintID)
 	return err
 }
 
-// UpdateGoalStatus toggles a goal's status in the database.
+func ResetSprint(sprintID int64) error {
+	_, err := DB.Exec("UPDATE sprints SET status = 'pending', start_time = NULL, elapsed_seconds = 0, last_paused_at = NULL WHERE id = ?", sprintID)
+	return err
+}
+
+// --- Task Management ---
+
 func UpdateGoalStatus(goalID int64, status string) error {
 	completedAt := "NULL"
 	if status == "completed" {
@@ -344,13 +443,6 @@ func UpdateGoalStatus(goalID int64, status string) error {
 	return err
 }
 
-// ResetSprint resets a sprint's status to 'pending' and clears the start time and elapsed seconds.
-func ResetSprint(sprintID int64) error {
-	_, err := DB.Exec("UPDATE sprints SET status = 'pending', start_time = NULL, elapsed_seconds = 0, last_paused_at = NULL WHERE id = ?", sprintID)
-	return err
-}
-
-// SwapGoalRanks swaps the rank of two goals to allow reordering.
 func SwapGoalRanks(goalID1, goalID2 int64) error {
 	var rank1, rank2 int
 	err := DB.QueryRow("SELECT rank FROM goals WHERE id = ?", goalID1).Scan(&rank1)
@@ -382,76 +474,32 @@ func SwapGoalRanks(goalID1, goalID2 int64) error {
 	return tx.Commit()
 }
 
-// AppendSprint adds a new sprint to the specified day.
-func AppendSprint(dayID int64) error {
+func AppendSprint(dayID int64, workspaceID int64) error {
 	var lastSprintNum int
-	err := DB.QueryRow("SELECT COALESCE(MAX(sprint_number), 0) FROM sprints WHERE day_id = ?", dayID).Scan(&lastSprintNum)
+	err := DB.QueryRow("SELECT COALESCE(MAX(sprint_number), 0) FROM sprints WHERE day_id = ? AND workspace_id = ?", dayID, workspaceID).Scan(&lastSprintNum)
 	if err != nil {
 		return err
 	}
 
-	_, err = DB.Exec("INSERT INTO sprints (day_id, sprint_number) VALUES (?, ?)", dayID, lastSprintNum+1)
+	_, err = DB.Exec("INSERT INTO sprints (day_id, workspace_id, sprint_number) VALUES (?, ?, ?)", dayID, workspaceID, lastSprintNum+1)
 	return err
 }
 
-// GetCompletedGoalsForDay retrieves all goals completed on a specific day across all sprints.
-func GetCompletedGoalsForDay(dayID int64) ([]models.Goal, error) {
-	dateStr := ""
-	err := DB.QueryRow("SELECT date FROM days WHERE id = ?", dayID).Scan(&dateStr)
-	if err != nil {
-		return nil, err
+func MoveGoal(goalID int64, targetSprintID int64) error {
+	var sprintArg interface{}
+	if targetSprintID == 0 {
+		sprintArg = nil // SQL NULL for Backlog
+	} else {
+		sprintArg = targetSprintID
 	}
 
-	rows, err := DB.Query(`
-		SELECT id, parent_id, description, status, rank, priority, effort, created_at 
-		FROM goals 
-		WHERE status = 'completed' 
-		AND (
-			sprint_id IN (SELECT id FROM sprints WHERE day_id = ?)
-			OR (sprint_id IS NULL AND strftime('%Y-%m-%d', completed_at) = ?)
-		)
-		ORDER BY completed_at DESC`, dayID, dateStr)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var goals []models.Goal
-	for rows.Next() {
-		var g models.Goal
-		if err := rows.Scan(&g.ID, &g.ParentID, &g.Description, &g.Status, &g.Rank, &g.Priority, &g.Effort, &g.CreatedAt); err != nil {
-			return nil, err
-		}
-		goals = append(goals, g)
-	}
-	return goals, nil
-}
-
-// AddSubtask inserts a new subtask linked to a parent goal.
-func AddSubtask(description string, parentID int64) error {
-	// Inherit sprint_id from parent
-	var sprintID sql.NullInt64
-	err := DB.QueryRow("SELECT sprint_id FROM goals WHERE id = ?", parentID).Scan(&sprintID)
-	if err != nil {
-		return err
-	}
-
-	// Calculate rank among siblings
-	var maxRank int
-	err = DB.QueryRow("SELECT COALESCE(MAX(rank), 0) FROM goals WHERE parent_id = ?", parentID).Scan(&maxRank)
-	if err != nil {
-		return err
-	}
-
-	_, err = DB.Exec(`INSERT INTO goals (description, parent_id, sprint_id, status, rank) VALUES (?, ?, ?, 'pending', ?)`,
-		description, parentID, sprintID, maxRank+1)
+	_, err := DB.Exec("UPDATE goals SET sprint_id = ? WHERE id = ?", sprintArg, goalID)
 	return err
 }
-
-// --- Task Management ---
 
 func EditGoal(goalID int64, newDescription string) error {
-	_, err := DB.Exec("UPDATE goals SET description = ? WHERE id = ?", newDescription, goalID)
+	tags := util.TagsToJSON(util.ExtractTags(newDescription))
+	_, err := DB.Exec("UPDATE goals SET description = ?, tags = ? WHERE id = ?", newDescription, tags, goalID)
 	return err
 }
 
@@ -460,7 +508,33 @@ func DeleteGoal(goalID int64) error {
 	return err
 }
 
-// SearchGoals finds tasks matching a string across all history (or limit to current day if preferred).
+// AddTagsToGoal appends new tags to a goal, avoiding duplicates.
+func AddTagsToGoal(goalID int64, tagsToAdd []string) error {
+	var currentTagsJSON string
+	err := DB.QueryRow("SELECT tags FROM goals WHERE id = ?", goalID).Scan(&currentTagsJSON)
+	if err != nil {
+		return err
+	}
+
+	currentTags := util.JSONToTags(currentTagsJSON)
+	tagSet := make(map[string]bool)
+	for _, t := range currentTags {
+		tagSet[t] = true
+	}
+	for _, t := range tagsToAdd {
+		tagSet[strings.ToLower(t)] = true
+	}
+
+	var newTags []string
+	for t := range tagSet {
+		newTags = append(newTags, t)
+	}
+
+	newTagsJSON := util.TagsToJSON(newTags)
+	_, err = DB.Exec("UPDATE goals SET tags = ? WHERE id = ?", newTagsJSON, goalID)
+	return err
+}
+
 func SearchGoals(query string) ([]models.Goal, error) {
 	likeQuery := "%" + query + "%"
 	rows, err := DB.Query(`
@@ -480,9 +554,27 @@ func SearchGoals(query string) ([]models.Goal, error) {
 	return goals, nil
 }
 
-// --- Sprint Lifecycle Logic ---
+func GetAllGoals() ([]models.Goal, error) {
+	rows, err := DB.Query(`
+		SELECT id, parent_id, sprint_id, description, status, rank, priority, effort, tags, created_at 
+		FROM goals 
+		ORDER BY rank ASC, created_at ASC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
 
-// MovePendingToBacklog transfers all unfinished tasks from a specific sprint to the Backlog (Sprint ID 0/NULL).
+	var goals []models.Goal
+	for rows.Next() {
+		var g models.Goal
+		if err := rows.Scan(&g.ID, &g.ParentID, &g.SprintID, &g.Description, &g.Status, &g.Rank, &g.Priority, &g.Effort, &g.Tags, &g.CreatedAt); err != nil {
+			return nil, err
+		}
+		goals = append(goals, g)
+	}
+	return goals, nil
+}
+
 func MovePendingToBacklog(sprintID int64) error {
 	_, err := DB.Exec("UPDATE goals SET sprint_id = NULL WHERE sprint_id = ? AND status != 'completed'", sprintID)
 	return err
@@ -490,19 +582,17 @@ func MovePendingToBacklog(sprintID int64) error {
 
 // --- Journaling ---
 
-// AddJournalEntry inserts a new journal entry.
-func AddJournalEntry(dayID int64, sprintID sql.NullInt64, content string) error {
-	_, err := DB.Exec("INSERT INTO journal_entries (day_id, sprint_id, content) VALUES (?, ?, ?)", dayID, sprintID, content)
+func AddJournalEntry(dayID int64, workspaceID int64, sprintID sql.NullInt64, goalID sql.NullInt64, content string) error {
+	_, err := DB.Exec("INSERT INTO journal_entries (day_id, workspace_id, sprint_id, goal_id, content) VALUES (?, ?, ?, ?, ?)", dayID, workspaceID, sprintID, goalID, content)
 	return err
 }
 
-// GetJournalEntries retrieves all journal entries for a given day.
-func GetJournalEntries(dayID int64) ([]models.JournalEntry, error) {
+func GetJournalEntries(dayID int64, workspaceID int64) ([]models.JournalEntry, error) {
 	rows, err := DB.Query(`
-		SELECT id, day_id, sprint_id, content, created_at 
+		SELECT id, day_id, workspace_id, sprint_id, goal_id, content, created_at 
 		FROM journal_entries 
-		WHERE day_id = ? 
-		ORDER BY created_at ASC`, dayID)
+		WHERE day_id = ? AND workspace_id = ?
+		ORDER BY created_at ASC`, dayID, workspaceID)
 	if err != nil {
 		return nil, err
 	}
@@ -511,7 +601,7 @@ func GetJournalEntries(dayID int64) ([]models.JournalEntry, error) {
 	var entries []models.JournalEntry
 	for rows.Next() {
 		var e models.JournalEntry
-		if err := rows.Scan(&e.ID, &e.DayID, &e.SprintID, &e.Content, &e.CreatedAt); err != nil {
+		if err := rows.Scan(&e.ID, &e.DayID, &e.WorkspaceID, &e.SprintID, &e.GoalID, &e.Content, &e.CreatedAt); err != nil {
 			return nil, err
 		}
 		entries = append(entries, e)

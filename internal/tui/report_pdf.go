@@ -5,12 +5,13 @@ import (
 	"path/filepath"
 
 	"github.com/akyairhashvil/SSPT/internal/database"
+	"github.com/akyairhashvil/SSPT/internal/models"
 	"github.com/go-pdf/fpdf"
 )
 
-func GeneratePDFReport(dayID int64) {
+func GeneratePDFReport(dayID int64, workspaceID int64) {
 	day, _ := database.GetDay(dayID)
-	sprints, _ := database.GetSprints(dayID)
+	sprints, _ := database.GetSprints(dayID, workspaceID)
 
 	pdf := fpdf.New("P", "mm", "A4", "")
 	pdf.AddPage()
@@ -22,10 +23,33 @@ func GeneratePDFReport(dayID int64) {
 
 	totalCompleted := 0
 
+	// Fetch ALL goals to build complete context
+	allGoals, _ := database.GetAllGoals()
+	masterTree := BuildHierarchy(allGoals)
+
+	// Helper to check relevancy
+	var isRelevant func(g models.Goal, sprintID int64) bool
+	isRelevant = func(g models.Goal, sprintID int64) bool {
+		if g.SprintID.Valid && g.SprintID.Int64 == sprintID {
+			return true
+		}
+		for _, sub := range g.Subtasks {
+			if isRelevant(sub, sprintID) {
+				return true
+			}
+		}
+		return false
+	}
+
 	for _, s := range sprints {
-		goals, _ := database.GetGoalsForSprint(s.ID)
-		rootGoals := BuildHierarchy(goals)
-		flatGoals := Flatten(rootGoals, 0, nil)
+		// Filter MasterTree for this sprint
+		var relevantRoots []models.Goal
+		for _, root := range masterTree {
+			if isRelevant(root, s.ID) {
+				relevantRoots = append(relevantRoots, root)
+			}
+		}
+		flatGoals := Flatten(relevantRoots, 0, nil)
 
 		// Header
 		pdf.SetFont("Arial", "B", 14)
@@ -68,7 +92,7 @@ func GeneratePDFReport(dayID int64) {
 	pdf.Ln(10)
 
 	// Journaling
-	entries, _ := database.GetJournalEntries(dayID)
+	entries, _ := database.GetJournalEntries(dayID, workspaceID)
 	if len(entries) > 0 {
 		pdf.SetFont("Arial", "B", 14)
 		pdf.Cell(0, 10, "Journal")
