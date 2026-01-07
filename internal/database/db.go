@@ -120,17 +120,28 @@ func migrate() {
 	
 	// Sprints
 	_, _ = DB.Exec("ALTER TABLE sprints ADD COLUMN workspace_id INTEGER")
+	// Backfill legacy sprints to default workspace (1)
+	_, _ = DB.Exec("UPDATE sprints SET workspace_id = (SELECT id FROM workspaces WHERE slug = 'personal') WHERE workspace_id IS NULL")
 
 	// Journal
 	_, _ = DB.Exec("ALTER TABLE journal_entries ADD COLUMN goal_id INTEGER")
 	_, _ = DB.Exec("ALTER TABLE journal_entries ADD COLUMN tags TEXT")
 	_, _ = DB.Exec("ALTER TABLE journal_entries ADD COLUMN workspace_id INTEGER")
+	// Backfill legacy journal entries
+	_, _ = DB.Exec("UPDATE journal_entries SET workspace_id = (SELECT id FROM workspaces WHERE slug = 'personal') WHERE workspace_id IS NULL")
+	
+	// Backfill legacy goals
+	_, _ = DB.Exec("UPDATE goals SET workspace_id = (SELECT id FROM workspaces WHERE slug = 'personal') WHERE workspace_id IS NULL")
+
+	// Workspaces
+	_, _ = DB.Exec("ALTER TABLE workspaces ADD COLUMN view_mode INTEGER DEFAULT 0")
+	_, _ = DB.Exec("ALTER TABLE workspaces ADD COLUMN theme TEXT DEFAULT 'default'")
 }
 
 // --- Workspaces ---
 
 func GetWorkspaces() ([]models.Workspace, error) {
-	rows, err := DB.Query("SELECT id, name, slug FROM workspaces ORDER BY id ASC")
+	rows, err := DB.Query("SELECT id, name, slug, view_mode, theme FROM workspaces ORDER BY id ASC")
 	if err != nil {
 		return nil, err
 	}
@@ -139,12 +150,38 @@ func GetWorkspaces() ([]models.Workspace, error) {
 	var ws []models.Workspace
 	for rows.Next() {
 		var w models.Workspace
-		if err := rows.Scan(&w.ID, &w.Name, &w.Slug); err != nil {
+		var viewMode sql.NullInt64
+		var theme sql.NullString
+		
+		if err := rows.Scan(&w.ID, &w.Name, &w.Slug, &viewMode, &theme); err != nil {
 			return nil, err
 		}
+		
+		if viewMode.Valid {
+			w.ViewMode = int(viewMode.Int64)
+		} else {
+			w.ViewMode = 0
+		}
+		
+		if theme.Valid {
+			w.Theme = theme.String
+		} else {
+			w.Theme = "default"
+		}
+		
 		ws = append(ws, w)
 	}
 	return ws, nil
+}
+
+func UpdateWorkspaceViewMode(workspaceID int64, mode int) error {
+	_, err := DB.Exec("UPDATE workspaces SET view_mode = ? WHERE id = ?", mode, workspaceID)
+	return err
+}
+
+func UpdateWorkspaceTheme(workspaceID int64, theme string) error {
+	_, err := DB.Exec("UPDATE workspaces SET theme = ? WHERE id = ?", theme, workspaceID)
+	return err
 }
 
 func EnsureDefaultWorkspace() (int64, error) {
@@ -169,6 +206,25 @@ func CreateWorkspace(name, slug string) (int64, error) {
 }
 
 // --- Day / Sprint Management ---
+
+// GetAdjacentDay finds the previous (direction < 0) or next (direction > 0) day ID relative to the current one.
+// Returns the new Day ID and its Date string.
+func GetAdjacentDay(currentDayID int64, direction int) (int64, string, error) {
+	var query string
+	if direction < 0 {
+		query = "SELECT id, date FROM days WHERE id < ? ORDER BY id DESC LIMIT 1"
+	} else {
+		query = "SELECT id, date FROM days WHERE id > ? ORDER BY id ASC LIMIT 1"
+	}
+
+	var id int64
+	var date string
+	err := DB.QueryRow(query, currentDayID).Scan(&id, &date)
+	if err != nil {
+		return 0, "", err
+	}
+	return id, date, nil
+}
 
 // CheckCurrentDay returns the Day ID if it exists for the current date.
 func CheckCurrentDay() int64 {

@@ -23,11 +23,14 @@ type MainModel struct {
 	state     SessionState
 	db        *sql.DB
 	textInput textinput.Model
-	dashboard DashboardModel // <--- This is now a real type!
+	dashboard DashboardModel 
 	err       error
+	width     int // Store window dimensions
+	height    int
 }
 
 func NewMainModel(db *sql.DB) MainModel {
+	// ... (rest of function is fine)
 	// Check if the day is already bootstrapped
 	dayID := database.CheckCurrentDay()
 
@@ -73,6 +76,16 @@ func (m MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case tea.KeyCtrlC:
 			return m, tea.Quit
 		}
+	case tea.WindowSizeMsg:
+		m.width = msg.Width
+		m.height = msg.Height
+		// Propagate to dashboard if active
+		if m.state == StateDashboard {
+			var newDash tea.Model
+			newDash, cmd = m.dashboard.Update(msg)
+			m.dashboard = newDash.(DashboardModel)
+			return m, cmd
+		}
 	}
 
 	// State-specific update logic
@@ -113,6 +126,8 @@ func (m MainModel) updateInitializing(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Transition state
 			m.state = StateDashboard
 			m.dashboard = NewDashboardModel(m.db, database.CheckCurrentDay()) // Load the new day
+			m.dashboard.width = m.width
+			m.dashboard.height = m.height
 			return m, m.dashboard.Init()
 		}
 	}

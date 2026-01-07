@@ -24,9 +24,11 @@ type Day struct {
 
 // Workspace represents an isolated project environment.
 type Workspace struct {
-	ID   int64
-	Name string
-	Slug string
+	ID       int64
+	Name     string
+	Slug     string
+	ViewMode int // 0=All, 1=Focused, 2=Minimal
+	Theme    string
 }
 
 // Sprint represents a 90-minute block.
