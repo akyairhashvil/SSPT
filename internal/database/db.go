@@ -34,7 +34,12 @@ func createTables() {
 		`CREATE TABLE IF NOT EXISTS workspaces (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			name TEXT NOT NULL,
-			slug TEXT UNIQUE
+			slug TEXT UNIQUE,
+			view_mode INTEGER DEFAULT 0,
+			theme TEXT DEFAULT 'default',
+			show_backlog INTEGER DEFAULT 1,
+			show_completed INTEGER DEFAULT 1,
+			show_archived INTEGER DEFAULT 0
 		);`,
 		`CREATE TABLE IF NOT EXISTS days (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -65,10 +70,12 @@ func createTables() {
 			priority INTEGER DEFAULT 3,
 			effort TEXT DEFAULT 'M',
 			tags TEXT,
+			recurrence_rule TEXT,
 			links TEXT,
 			rank INTEGER DEFAULT 0,
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 			completed_at DATETIME,
+			archived_at DATETIME,
 			FOREIGN KEY(sprint_id) REFERENCES sprints(id),
 			FOREIGN KEY(parent_id) REFERENCES goals(id),
 			FOREIGN KEY(workspace_id) REFERENCES workspaces(id)
@@ -86,6 +93,17 @@ func createTables() {
 			FOREIGN KEY(workspace_id) REFERENCES workspaces(id),
 			FOREIGN KEY(sprint_id) REFERENCES sprints(id),
 			FOREIGN KEY(goal_id) REFERENCES goals(id)
+		);`,
+		`CREATE TABLE IF NOT EXISTS task_deps (
+			goal_id INTEGER NOT NULL,
+			depends_on_id INTEGER NOT NULL,
+			PRIMARY KEY (goal_id, depends_on_id),
+			FOREIGN KEY(goal_id) REFERENCES goals(id),
+			FOREIGN KEY(depends_on_id) REFERENCES goals(id)
+		);`,
+		`CREATE TABLE IF NOT EXISTS settings (
+			key TEXT PRIMARY KEY,
+			value TEXT
 		);`,
 	}
 
@@ -107,17 +125,19 @@ func migrate() {
 	_, _ = DB.Exec("ALTER TABLE sprints ADD COLUMN elapsed_seconds INTEGER DEFAULT 0")
 	// Add rank to goals
 	_, _ = DB.Exec("ALTER TABLE goals ADD COLUMN rank INTEGER DEFAULT 0")
-	
+
 	// V3 Migrations
 	// Goals
 	_, _ = DB.Exec("ALTER TABLE goals ADD COLUMN parent_id INTEGER")
 	_, _ = DB.Exec("ALTER TABLE goals ADD COLUMN workspace_id INTEGER")
 	_, _ = DB.Exec("ALTER TABLE goals ADD COLUMN notes TEXT")
 	_, _ = DB.Exec("ALTER TABLE goals ADD COLUMN priority INTEGER DEFAULT 3")
+	_, _ = DB.Exec("ALTER TABLE goals ADD COLUMN recurrence_rule TEXT")
+	_, _ = DB.Exec("ALTER TABLE goals ADD COLUMN archived_at DATETIME")
 	_, _ = DB.Exec("ALTER TABLE goals ADD COLUMN effort TEXT DEFAULT 'M'")
 	_, _ = DB.Exec("ALTER TABLE goals ADD COLUMN tags TEXT")
 	_, _ = DB.Exec("ALTER TABLE goals ADD COLUMN links TEXT")
-	
+
 	// Sprints
 	_, _ = DB.Exec("ALTER TABLE sprints ADD COLUMN workspace_id INTEGER")
 	// Backfill legacy sprints to default workspace (1)
@@ -129,19 +149,56 @@ func migrate() {
 	_, _ = DB.Exec("ALTER TABLE journal_entries ADD COLUMN workspace_id INTEGER")
 	// Backfill legacy journal entries
 	_, _ = DB.Exec("UPDATE journal_entries SET workspace_id = (SELECT id FROM workspaces WHERE slug = 'personal') WHERE workspace_id IS NULL")
-	
+
 	// Backfill legacy goals
 	_, _ = DB.Exec("UPDATE goals SET workspace_id = (SELECT id FROM workspaces WHERE slug = 'personal') WHERE workspace_id IS NULL")
 
 	// Workspaces
 	_, _ = DB.Exec("ALTER TABLE workspaces ADD COLUMN view_mode INTEGER DEFAULT 0")
 	_, _ = DB.Exec("ALTER TABLE workspaces ADD COLUMN theme TEXT DEFAULT 'default'")
+	_, _ = DB.Exec("ALTER TABLE workspaces ADD COLUMN show_backlog INTEGER DEFAULT 1")
+	_, _ = DB.Exec("ALTER TABLE workspaces ADD COLUMN show_completed INTEGER DEFAULT 1")
+	_, _ = DB.Exec("ALTER TABLE workspaces ADD COLUMN show_archived INTEGER DEFAULT 0")
+
+	// Task dependencies
+	_, _ = DB.Exec(`CREATE TABLE IF NOT EXISTS task_deps (
+		goal_id INTEGER NOT NULL,
+		depends_on_id INTEGER NOT NULL,
+		PRIMARY KEY (goal_id, depends_on_id),
+		FOREIGN KEY(goal_id) REFERENCES goals(id),
+		FOREIGN KEY(depends_on_id) REFERENCES goals(id)
+	);`)
+
+	// Settings
+	_, _ = DB.Exec(`CREATE TABLE IF NOT EXISTS settings (
+		key TEXT PRIMARY KEY,
+		value TEXT
+	);`)
+}
+
+// --- Settings ---
+
+func GetSetting(key string) (string, bool) {
+	var value sql.NullString
+	err := DB.QueryRow("SELECT value FROM settings WHERE key = ?", key).Scan(&value)
+	if err != nil {
+		return "", false
+	}
+	if value.Valid {
+		return value.String, true
+	}
+	return "", false
+}
+
+func SetSetting(key, value string) error {
+	_, err := DB.Exec("INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", key, value)
+	return err
 }
 
 // --- Workspaces ---
 
 func GetWorkspaces() ([]models.Workspace, error) {
-	rows, err := DB.Query("SELECT id, name, slug, view_mode, theme FROM workspaces ORDER BY id ASC")
+	rows, err := DB.Query("SELECT id, name, slug, view_mode, theme, show_backlog, show_completed, show_archived FROM workspaces ORDER BY id ASC")
 	if err != nil {
 		return nil, err
 	}
@@ -152,23 +209,39 @@ func GetWorkspaces() ([]models.Workspace, error) {
 		var w models.Workspace
 		var viewMode sql.NullInt64
 		var theme sql.NullString
-		
-		if err := rows.Scan(&w.ID, &w.Name, &w.Slug, &viewMode, &theme); err != nil {
+		var showBacklog, showCompleted, showArchived sql.NullInt64
+
+		if err := rows.Scan(&w.ID, &w.Name, &w.Slug, &viewMode, &theme, &showBacklog, &showCompleted, &showArchived); err != nil {
 			return nil, err
 		}
-		
+
 		if viewMode.Valid {
 			w.ViewMode = int(viewMode.Int64)
 		} else {
 			w.ViewMode = 0
 		}
-		
+
 		if theme.Valid {
 			w.Theme = theme.String
 		} else {
 			w.Theme = "default"
 		}
-		
+		if showBacklog.Valid {
+			w.ShowBacklog = showBacklog.Int64 != 0
+		} else {
+			w.ShowBacklog = true
+		}
+		if showCompleted.Valid {
+			w.ShowCompleted = showCompleted.Int64 != 0
+		} else {
+			w.ShowCompleted = true
+		}
+		if showArchived.Valid {
+			w.ShowArchived = showArchived.Int64 != 0
+		} else {
+			w.ShowArchived = false
+		}
+
 		ws = append(ws, w)
 	}
 	return ws, nil
@@ -182,6 +255,169 @@ func UpdateWorkspaceViewMode(workspaceID int64, mode int) error {
 func UpdateWorkspaceTheme(workspaceID int64, theme string) error {
 	_, err := DB.Exec("UPDATE workspaces SET theme = ? WHERE id = ?", theme, workspaceID)
 	return err
+}
+
+func UpdateWorkspacePaneVisibility(workspaceID int64, showBacklog, showCompleted, showArchived bool) error {
+	backlog := 0
+	completed := 0
+	archived := 0
+	if showBacklog {
+		backlog = 1
+	}
+	if showCompleted {
+		completed = 1
+	}
+	if showArchived {
+		archived = 1
+	}
+	_, err := DB.Exec("UPDATE workspaces SET show_backlog = ?, show_completed = ?, show_archived = ? WHERE id = ?", backlog, completed, archived, workspaceID)
+	return err
+}
+
+// --- Dependencies ---
+
+func AddGoalDependency(goalID, dependsOnID int64) error {
+	goalWS, ok := getGoalWorkspaceID(goalID)
+	if !ok {
+		return nil
+	}
+	depWS, ok := getGoalWorkspaceID(dependsOnID)
+	if !ok || depWS != goalWS {
+		return nil
+	}
+	_, err := DB.Exec("INSERT OR IGNORE INTO task_deps (goal_id, depends_on_id) VALUES (?, ?)", goalID, dependsOnID)
+	return err
+}
+
+func RemoveGoalDependency(goalID, dependsOnID int64) error {
+	_, err := DB.Exec("DELETE FROM task_deps WHERE goal_id = ? AND depends_on_id = ?", goalID, dependsOnID)
+	return err
+}
+
+func GetGoalDependencies(goalID int64) (map[int64]bool, error) {
+	rows, err := DB.Query("SELECT depends_on_id FROM task_deps WHERE goal_id = ?", goalID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	deps := make(map[int64]bool)
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		deps[id] = true
+	}
+	return deps, nil
+}
+
+func SetGoalDependencies(goalID int64, deps []int64) error {
+	goalWS, ok := getGoalWorkspaceID(goalID)
+	if !ok {
+		return nil
+	}
+	tx, err := DB.Begin()
+	if err != nil {
+		return err
+	}
+	if _, err := tx.Exec("DELETE FROM task_deps WHERE goal_id = ?", goalID); err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	for _, id := range deps {
+		if id == goalID {
+			continue
+		}
+		depWS, ok := getGoalWorkspaceID(id)
+		if !ok || depWS != goalWS {
+			continue
+		}
+		if _, err := tx.Exec("INSERT OR IGNORE INTO task_deps (goal_id, depends_on_id) VALUES (?, ?)", goalID, id); err != nil {
+			_ = tx.Rollback()
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+func regenerateRecurringGoal(goalID int64) error {
+	var g models.Goal
+	err := DB.QueryRow(`
+		SELECT id, description, workspace_id, sprint_id, notes, priority, effort, tags, recurrence_rule
+		FROM goals WHERE id = ?`, goalID).Scan(
+		&g.ID, &g.Description, &g.WorkspaceID, &g.SprintID, &g.Notes, &g.Priority, &g.Effort, &g.Tags, &g.RecurrenceRule,
+	)
+	if err != nil {
+		return err
+	}
+	if !g.RecurrenceRule.Valid || strings.TrimSpace(g.RecurrenceRule.String) == "" {
+		return nil
+	}
+	rule := strings.ToLower(strings.TrimSpace(g.RecurrenceRule.String))
+	if rule != "daily" && !strings.HasPrefix(rule, "weekly:") && !strings.HasPrefix(rule, "monthly:") {
+		return nil
+	}
+
+	// Regenerate into backlog so it surfaces even if sprint is completed.
+	var maxRank int
+	if g.WorkspaceID.Valid {
+		_ = DB.QueryRow("SELECT COALESCE(MAX(rank), 0) FROM goals WHERE sprint_id IS NULL AND workspace_id = ?", g.WorkspaceID.Int64).Scan(&maxRank)
+	}
+	var wsID interface{} = nil
+	if g.WorkspaceID.Valid {
+		wsID = g.WorkspaceID.Int64
+	}
+	_, err = DB.Exec(`INSERT INTO goals (workspace_id, description, sprint_id, status, rank, tags, notes, priority, effort, recurrence_rule)
+		VALUES (?, ?, NULL, 'pending', ?, ?, ?, ?, ?, ?)`,
+		wsID, g.Description, maxRank+1, g.Tags, g.Notes, g.Priority, g.Effort, g.RecurrenceRule,
+	)
+	return err
+}
+
+func getGoalWorkspaceID(goalID int64) (int64, bool) {
+	var wsID sql.NullInt64
+	err := DB.QueryRow("SELECT workspace_id FROM goals WHERE id = ?", goalID).Scan(&wsID)
+	if err != nil || !wsID.Valid {
+		return 0, false
+	}
+	return wsID.Int64, true
+}
+
+func IsGoalBlocked(goalID int64) (bool, error) {
+	var count int
+	err := DB.QueryRow(`
+		SELECT COUNT(1)
+		FROM task_deps td
+		JOIN goals g ON td.depends_on_id = g.id
+		WHERE td.goal_id = ? AND g.status != 'completed'`, goalID).Scan(&count)
+	if err != nil {
+		return false, err
+	}
+	return count > 0, nil
+}
+
+func GetBlockedGoalIDs(workspaceID int64) (map[int64]bool, error) {
+	rows, err := DB.Query(`
+		SELECT DISTINCT td.goal_id
+		FROM task_deps td
+		JOIN goals g ON td.depends_on_id = g.id
+		JOIN goals gg ON td.goal_id = gg.id
+		WHERE gg.workspace_id = ? AND g.status != 'completed'`, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	blocked := make(map[int64]bool)
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		blocked[id] = true
+	}
+	return blocked, nil
 }
 
 func EnsureDefaultWorkspace() (int64, error) {
@@ -334,9 +570,9 @@ func GetSprints(dayID int64, workspaceID int64) ([]models.Sprint, error) {
 // GetBacklogGoals retrieves goals that are not assigned to any sprint and belong to the workspace.
 func GetBacklogGoals(workspaceID int64) ([]models.Goal, error) {
 	rows, err := DB.Query(`
-		SELECT id, parent_id, description, status, rank, priority, effort, tags, created_at 
+		SELECT id, parent_id, description, status, rank, priority, effort, tags, recurrence_rule, created_at, archived_at 
 		FROM goals 
-		WHERE sprint_id IS NULL AND status != 'completed' AND workspace_id = ?
+		WHERE sprint_id IS NULL AND status != 'completed' AND status != 'archived' AND workspace_id = ?
 		ORDER BY rank ASC, created_at DESC`, workspaceID)
 	if err != nil {
 		return nil, err
@@ -346,7 +582,7 @@ func GetBacklogGoals(workspaceID int64) ([]models.Goal, error) {
 	var goals []models.Goal
 	for rows.Next() {
 		var g models.Goal
-		if err := rows.Scan(&g.ID, &g.ParentID, &g.Description, &g.Status, &g.Rank, &g.Priority, &g.Effort, &g.Tags, &g.CreatedAt); err != nil {
+		if err := rows.Scan(&g.ID, &g.ParentID, &g.Description, &g.Status, &g.Rank, &g.Priority, &g.Effort, &g.Tags, &g.RecurrenceRule, &g.CreatedAt, &g.ArchivedAt); err != nil {
 			return nil, err
 		}
 		goals = append(goals, g)
@@ -357,9 +593,9 @@ func GetBacklogGoals(workspaceID int64) ([]models.Goal, error) {
 // GetGoalsForSprint retrieves goals for a specific sprint ID.
 func GetGoalsForSprint(sprintID int64) ([]models.Goal, error) {
 	rows, err := DB.Query(`
-		SELECT id, parent_id, sprint_id, description, status, rank, priority, effort, tags, created_at 
+		SELECT id, parent_id, sprint_id, description, status, rank, priority, effort, tags, recurrence_rule, created_at, archived_at 
 		FROM goals 
-		WHERE sprint_id = ? 
+		WHERE sprint_id = ? AND status != 'archived' 
 		ORDER BY rank ASC, created_at ASC`, sprintID)
 	if err != nil {
 		return nil, err
@@ -369,7 +605,7 @@ func GetGoalsForSprint(sprintID int64) ([]models.Goal, error) {
 	var goals []models.Goal
 	for rows.Next() {
 		var g models.Goal
-		if err := rows.Scan(&g.ID, &g.ParentID, &g.SprintID, &g.Description, &g.Status, &g.Rank, &g.Priority, &g.Effort, &g.Tags, &g.CreatedAt); err != nil {
+		if err := rows.Scan(&g.ID, &g.ParentID, &g.SprintID, &g.Description, &g.Status, &g.Rank, &g.Priority, &g.Effort, &g.Tags, &g.RecurrenceRule, &g.CreatedAt, &g.ArchivedAt); err != nil {
 			return nil, err
 		}
 		goals = append(goals, g)
@@ -413,7 +649,7 @@ func GetCompletedGoalsForDay(dayID int64, workspaceID int64) ([]models.Goal, err
 	}
 
 	rows, err := DB.Query(`
-		SELECT id, parent_id, description, status, rank, priority, effort, tags, created_at 
+		SELECT id, parent_id, description, status, rank, priority, effort, tags, recurrence_rule, created_at, archived_at 
 		FROM goals 
 		WHERE status = 'completed' AND workspace_id = ?
 		AND (
@@ -429,7 +665,7 @@ func GetCompletedGoalsForDay(dayID int64, workspaceID int64) ([]models.Goal, err
 	var goals []models.Goal
 	for rows.Next() {
 		var g models.Goal
-		if err := rows.Scan(&g.ID, &g.ParentID, &g.Description, &g.Status, &g.Rank, &g.Priority, &g.Effort, &g.Tags, &g.CreatedAt); err != nil {
+		if err := rows.Scan(&g.ID, &g.ParentID, &g.Description, &g.Status, &g.Rank, &g.Priority, &g.Effort, &g.Tags, &g.RecurrenceRule, &g.CreatedAt, &g.ArchivedAt); err != nil {
 			return nil, err
 		}
 		goals = append(goals, g)
@@ -496,7 +732,13 @@ func UpdateGoalStatus(goalID int64, status string) error {
 	}
 	query := fmt.Sprintf("UPDATE goals SET status = ?, completed_at = %s WHERE id = ?", completedAt)
 	_, err := DB.Exec(query, status, goalID)
-	return err
+	if err != nil {
+		return err
+	}
+	if status == "completed" {
+		return regenerateRecurringGoal(goalID)
+	}
+	return nil
 }
 
 func SwapGoalRanks(goalID1, goalID2 int64) error {
@@ -559,6 +801,15 @@ func EditGoal(goalID int64, newDescription string) error {
 	return err
 }
 
+func UpdateGoalRecurrence(goalID int64, rule string) error {
+	if strings.TrimSpace(rule) == "" {
+		_, err := DB.Exec("UPDATE goals SET recurrence_rule = NULL WHERE id = ?", goalID)
+		return err
+	}
+	_, err := DB.Exec("UPDATE goals SET recurrence_rule = ? WHERE id = ?", rule, goalID)
+	return err
+}
+
 func DeleteGoal(goalID int64) error {
 	_, err := DB.Exec("DELETE FROM goals WHERE id = ?", goalID)
 	return err
@@ -591,10 +842,28 @@ func AddTagsToGoal(goalID int64, tagsToAdd []string) error {
 	return err
 }
 
+// SetGoalTags replaces all tags for a goal.
+func SetGoalTags(goalID int64, tags []string) error {
+	tagSet := make(map[string]bool)
+	for _, t := range tags {
+		t = strings.TrimSpace(strings.ToLower(strings.TrimPrefix(t, "#")))
+		if t != "" {
+			tagSet[t] = true
+		}
+	}
+	var out []string
+	for t := range tagSet {
+		out = append(out, t)
+	}
+	newTagsJSON := util.TagsToJSON(out)
+	_, err := DB.Exec("UPDATE goals SET tags = ? WHERE id = ?", newTagsJSON, goalID)
+	return err
+}
+
 // Search performs a dynamic search on goals based on structured query filters and workspace isolation.
 func Search(query util.SearchQuery, workspaceID int64) ([]models.Goal, error) {
 	var args []interface{}
-	sql := `SELECT id, parent_id, sprint_id, description, status, rank, priority, effort, tags, created_at 
+	sql := `SELECT id, parent_id, sprint_id, description, status, rank, priority, effort, tags, recurrence_rule, created_at, archived_at 
 	        FROM goals WHERE workspace_id = ?`
 	args = append(args, workspaceID)
 
@@ -635,7 +904,7 @@ func scanGoals(query string, args ...interface{}) ([]models.Goal, error) {
 	var goals []models.Goal
 	for rows.Next() {
 		var g models.Goal
-		if err := rows.Scan(&g.ID, &g.ParentID, &g.SprintID, &g.Description, &g.Status, &g.Rank, &g.Priority, &g.Effort, &g.Tags, &g.CreatedAt); err != nil {
+		if err := rows.Scan(&g.ID, &g.ParentID, &g.SprintID, &g.Description, &g.Status, &g.Rank, &g.Priority, &g.Effort, &g.Tags, &g.RecurrenceRule, &g.CreatedAt, &g.ArchivedAt); err != nil {
 			return nil, err
 		}
 		goals = append(goals, g)
@@ -645,13 +914,46 @@ func scanGoals(query string, args ...interface{}) ([]models.Goal, error) {
 
 func GetAllGoals() ([]models.Goal, error) {
 	return scanGoals(`
-		SELECT id, parent_id, sprint_id, description, status, rank, priority, effort, tags, created_at 
+		SELECT id, parent_id, sprint_id, description, status, rank, priority, effort, tags, recurrence_rule, created_at, archived_at 
 		FROM goals 
 		ORDER BY rank ASC, created_at ASC`)
 }
 
 func MovePendingToBacklog(sprintID int64) error {
 	_, err := DB.Exec("UPDATE goals SET sprint_id = NULL WHERE sprint_id = ? AND status != 'completed'", sprintID)
+	return err
+}
+
+// Archived goals
+func GetArchivedGoals(workspaceID int64) ([]models.Goal, error) {
+	rows, err := DB.Query(`
+		SELECT id, parent_id, sprint_id, description, status, rank, priority, effort, tags, recurrence_rule, created_at, archived_at 
+		FROM goals 
+		WHERE status = 'archived' AND workspace_id = ?
+		ORDER BY archived_at DESC`, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var goals []models.Goal
+	for rows.Next() {
+		var g models.Goal
+		if err := rows.Scan(&g.ID, &g.ParentID, &g.SprintID, &g.Description, &g.Status, &g.Rank, &g.Priority, &g.Effort, &g.Tags, &g.RecurrenceRule, &g.CreatedAt, &g.ArchivedAt); err != nil {
+			return nil, err
+		}
+		goals = append(goals, g)
+	}
+	return goals, nil
+}
+
+func ArchiveGoal(goalID int64) error {
+	_, err := DB.Exec("UPDATE goals SET status = 'archived', archived_at = CURRENT_TIMESTAMP WHERE id = ?", goalID)
+	return err
+}
+
+func UnarchiveGoal(goalID int64) error {
+	_, err := DB.Exec("UPDATE goals SET status = 'pending', archived_at = NULL, sprint_id = NULL WHERE id = ?", goalID)
 	return err
 }
 
