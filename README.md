@@ -62,10 +62,48 @@ User-only:
 ./scripts/uninstall.sh --user
 ```
 
+Note: uninstall also removes your local database in the user data directory.
+
 ### Run
 ```bash
 sspt
 ```
+
+### Export (One-Click)
+Press `Ctrl+E` in the app to export a JSON vault snapshot to:
+```
+~/Documents/SSPT/exports/
+```
+If a passphrase is set, the export is encrypted using the stored passphrase hash.
+
+### Seed Import (Tasks + Sprints)
+On first run, SSPT generates a skeleton seed at:
+```
+~/.config/sspt/seed.txt
+```
+Edit it and press `I` in the app to import once.
+
+DSL Example:
+```
+= Personal
++ 1
+* Ship onboarding flow #focus @L !2
+- Write checklist
+* Draft project brief #docs !3
++ 2
+* Review backlog #review
+
+* Unassigned backlog item #later
+```
+
+Notes:
+- `= Workspace`
+- `+ Sprint number`
+- `* Task`
+- `- Subtask`
+- Tags: `#tag`  Priority: `!1..5`  Effort: `@S|@M|@L`  Recurrence: `~daily|~weekly:mon,tue`
+
+JSON seed is still supported if you prefer `~/.config/sspt/seed.json`.
 
 ## Contributing
 

@@ -2,6 +2,7 @@ package database
 
 import (
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -467,6 +468,21 @@ func RecreateEncryptedDatabase(key string) error {
 	return nil
 }
 
+func ClearDatabase() error {
+	if dbFile == "" {
+		return fmt.Errorf("database path unavailable")
+	}
+	if DB != nil {
+		if err := DB.Close(); err != nil {
+			return err
+		}
+	}
+	_ = os.Remove(dbFile)
+	_ = os.Remove(dbFile + ".bak")
+	_ = os.Remove(dbFile + ".enc")
+	return InitDB(dbFile, "")
+}
+
 // --- Settings ---
 
 func GetSetting(key string) (string, bool) {
@@ -732,6 +748,18 @@ func CreateWorkspace(name, slug string) (int64, error) {
 	return res.LastInsertId()
 }
 
+func GetWorkspaceIDBySlug(slug string) (int64, bool, error) {
+	var id int64
+	err := DB.QueryRow("SELECT id FROM workspaces WHERE slug = ?", slug).Scan(&id)
+	if err == sql.ErrNoRows {
+		return 0, false, nil
+	}
+	if err != nil {
+		return 0, false, err
+	}
+	return id, true, nil
+}
+
 // --- Day / Sprint Management ---
 
 // GetAdjacentDay finds the previous (direction < 0) or next (direction > 0) day ID relative to the current one.
@@ -931,6 +959,79 @@ func AddGoal(workspaceID int64, description string, sprintID int64) error {
 	return err
 }
 
+func UpdateGoalPriority(goalID int64, priority int) error {
+	if priority < 1 {
+		priority = 1
+	}
+	if priority > 5 {
+		priority = 5
+	}
+	_, err := DB.Exec("UPDATE goals SET priority = ? WHERE id = ?", priority, goalID)
+	return err
+}
+
+type GoalSeed struct {
+	Description string   `json:"description"`
+	Tags        []string `json:"tags,omitempty"`
+	Priority    int      `json:"priority,omitempty"`
+	Effort      string   `json:"effort,omitempty"`
+	Notes       string   `json:"notes,omitempty"`
+	Recurrence  string   `json:"recurrence,omitempty"`
+	Links       []string `json:"links,omitempty"`
+}
+
+func AddGoalDetailed(workspaceID int64, sprintID int64, seed GoalSeed) error {
+	var maxRank int
+	var err error
+	if sprintID > 0 {
+		err = DB.QueryRow("SELECT COALESCE(MAX(rank), 0) FROM goals WHERE sprint_id = ?", sprintID).Scan(&maxRank)
+	} else {
+		err = DB.QueryRow("SELECT COALESCE(MAX(rank), 0) FROM goals WHERE sprint_id IS NULL AND workspace_id = ?", workspaceID).Scan(&maxRank)
+	}
+	if err != nil {
+		return err
+	}
+
+	priority := seed.Priority
+	if priority == 0 {
+		priority = 3
+	}
+	effort := strings.TrimSpace(seed.Effort)
+	if effort == "" {
+		effort = "M"
+	}
+	tags := seed.Tags
+	if len(tags) == 0 {
+		tags = util.ExtractTags(seed.Description)
+	}
+	tagsJSON := util.TagsToJSON(tags)
+	linksJSON, _ := json.Marshal(seed.Links)
+
+	var sprintIDArg interface{}
+	if sprintID > 0 {
+		sprintIDArg = sprintID
+	} else {
+		sprintIDArg = nil
+	}
+	var notesArg interface{}
+	if strings.TrimSpace(seed.Notes) != "" {
+		notesArg = seed.Notes
+	} else {
+		notesArg = nil
+	}
+	var recurrenceArg interface{}
+	if strings.TrimSpace(seed.Recurrence) != "" {
+		recurrenceArg = seed.Recurrence
+	} else {
+		recurrenceArg = nil
+	}
+
+	_, err = DB.Exec(`INSERT INTO goals (workspace_id, description, sprint_id, status, rank, tags, priority, effort, notes, recurrence_rule, links)
+		VALUES (?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?)`,
+		workspaceID, seed.Description, sprintIDArg, maxRank+1, tagsJSON, priority, effort, notesArg, recurrenceArg, string(linksJSON))
+	return err
+}
+
 // GetCompletedGoalsForDay retrieves all goals completed on a specific day and workspace across all sprints.
 func GetCompletedGoalsForDay(dayID int64, workspaceID int64) ([]models.Goal, error) {
 	dateStr := ""
@@ -984,6 +1085,53 @@ func AddSubtask(description string, parentID int64) error {
 	tags := util.TagsToJSON(util.ExtractTags(description))
 	_, err = DB.Exec(`INSERT INTO goals (description, parent_id, sprint_id, workspace_id, status, rank, tags) VALUES (?, ?, ?, ?, 'pending', ?, ?)`,
 		description, parentID, sprintID, workspaceID, maxRank+1, tags)
+	return err
+}
+
+func AddSubtaskDetailed(parentID int64, seed GoalSeed) error {
+	var sprintID sql.NullInt64
+	var workspaceID sql.NullInt64
+	err := DB.QueryRow("SELECT sprint_id, workspace_id FROM goals WHERE id = ?", parentID).Scan(&sprintID, &workspaceID)
+	if err != nil {
+		return err
+	}
+
+	var maxRank int
+	if err := DB.QueryRow("SELECT COALESCE(MAX(rank), 0) FROM goals WHERE parent_id = ?", parentID).Scan(&maxRank); err != nil {
+		return err
+	}
+
+	priority := seed.Priority
+	if priority == 0 {
+		priority = 3
+	}
+	effort := strings.TrimSpace(seed.Effort)
+	if effort == "" {
+		effort = "M"
+	}
+	tags := seed.Tags
+	if len(tags) == 0 {
+		tags = util.ExtractTags(seed.Description)
+	}
+	tagsJSON := util.TagsToJSON(tags)
+	linksJSON, _ := json.Marshal(seed.Links)
+
+	var notesArg interface{}
+	if strings.TrimSpace(seed.Notes) != "" {
+		notesArg = seed.Notes
+	} else {
+		notesArg = nil
+	}
+	var recurrenceArg interface{}
+	if strings.TrimSpace(seed.Recurrence) != "" {
+		recurrenceArg = seed.Recurrence
+	} else {
+		recurrenceArg = nil
+	}
+
+	_, err = DB.Exec(`INSERT INTO goals (description, parent_id, sprint_id, workspace_id, status, rank, tags, priority, effort, notes, recurrence_rule, links)
+		VALUES (?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?)`,
+		seed.Description, parentID, sprintID, workspaceID, maxRank+1, tagsJSON, priority, effort, notesArg, recurrenceArg, string(linksJSON))
 	return err
 }
 

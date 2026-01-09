@@ -38,16 +38,22 @@ while [[ $# -gt 0 ]]; do
 done
 
 install_path="$prefix/bin/$bin_name"
+data_root="${XDG_DATA_HOME:-$HOME/.local/share}"
+data_dir="$data_root/sspt"
 
 if [[ ! -e "$install_path" ]]; then
   echo "No installed binary at $install_path"
-  exit 0
+else
+  rm_cmd=(rm -f "$install_path")
+  if [[ "$prefix" == /usr/* ]]; then
+    rm_cmd=(sudo "${rm_cmd[@]}")
+  fi
+
+  "${rm_cmd[@]}"
+  echo "Removed $install_path"
 fi
 
-rm_cmd=(rm -f "$install_path")
-if [[ "$prefix" == /usr/* ]]; then
-  rm_cmd=(sudo "${rm_cmd[@]}")
+if [[ -d "$data_dir" ]]; then
+  rm -rf "$data_dir"
+  echo "Removed data directory $data_dir"
 fi
-
-"${rm_cmd[@]}"
-echo "Removed $install_path"

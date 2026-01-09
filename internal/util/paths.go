@@ -21,6 +21,21 @@ func ReportsDir(app string) string {
 	return filepath.Join(DocumentsDir(), strings.ToUpper(app))
 }
 
+func ConfigDir(app string) string {
+	if base := strings.TrimSpace(os.Getenv("XDG_CONFIG_HOME")); base != "" {
+		return filepath.Join(base, app)
+	}
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return filepath.Join(".", app)
+	}
+	return filepath.Join(home, ".config", app)
+}
+
+func SeedPath(app string) string {
+	return filepath.Join(ConfigDir(app), "seed.txt")
+}
+
 func DocumentsDir() string {
 	if base := strings.TrimSpace(os.Getenv("XDG_DOCUMENTS_DIR")); base != "" {
 		return expandHome(base)

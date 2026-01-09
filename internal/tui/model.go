@@ -23,7 +23,7 @@ type MainModel struct {
 	state     SessionState
 	db        *sql.DB
 	textInput textinput.Model
-	dashboard DashboardModel 
+	dashboard DashboardModel
 	err       error
 	width     int // Store window dimensions
 	height    int
@@ -33,6 +33,7 @@ func NewMainModel(db *sql.DB) MainModel {
 	// ... (rest of function is fine)
 	// Check if the day is already bootstrapped
 	dayID := database.CheckCurrentDay()
+	_, _ = EnsureSeedFile()
 
 	m := MainModel{
 		db: db,

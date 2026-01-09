@@ -94,6 +94,9 @@ type DashboardModel struct {
 	passphraseInput      textinput.Model
 	lastInput            time.Time
 	changingPassphrase   bool
+	confirmingClearDB    bool
+	clearDBNeedsPass     bool
+	clearDBStatus        string
 	passphraseStage      int
 	passphraseStatus     string
 	passphraseCurrent    textinput.Model
@@ -549,12 +552,16 @@ func (m DashboardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	// Input Modes
-	if m.changingPassphrase || m.confirmingDelete || m.creatingGoal || m.editingGoal || m.journaling || m.searching || m.creatingWorkspace || m.initializingSprints || m.tagging || m.themePicking || m.depPicking || m.settingRecurrence {
+	if m.changingPassphrase || m.confirmingDelete || m.confirmingClearDB || m.creatingGoal || m.editingGoal || m.journaling || m.searching || m.creatingWorkspace || m.initializingSprints || m.tagging || m.themePicking || m.depPicking || m.settingRecurrence {
 		switch msg := msg.(type) {
 		case tea.KeyMsg:
 			if msg.Type == tea.KeyEsc {
 				m.confirmingDelete = false
 				m.confirmDeleteGoalID = 0
+				m.confirmingClearDB = false
+				m.clearDBNeedsPass = false
+				m.clearDBStatus = ""
+				m.passphraseInput.Reset()
 				m.changingPassphrase = false
 				m.passphraseStage = 0
 				m.passphraseStatus = ""
@@ -578,6 +585,40 @@ func (m DashboardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					}
 					m.confirmingDelete = false
 					m.confirmDeleteGoalID = 0
+				} else if m.confirmingClearDB {
+					if m.clearDBNeedsPass {
+						entered := strings.TrimSpace(m.passphraseInput.Value())
+						if entered == "" {
+							m.clearDBStatus = "Passphrase required"
+							m.passphraseInput.Reset()
+							m.passphraseInput.Focus()
+							return m, nil
+						}
+						if hashPassphrase(entered) != m.passphraseHash {
+							m.clearDBStatus = "Incorrect passphrase"
+							m.passphraseInput.Reset()
+							m.passphraseInput.Focus()
+							return m, nil
+						}
+					}
+					if err := database.ClearDatabase(); err != nil {
+						m.err = err
+					} else {
+						wsID, _ := database.EnsureDefaultWorkspace()
+						m.workspaces, _ = database.GetWorkspaces()
+						m.activeWorkspaceIdx = 0
+						m.pendingWorkspaceID = wsID
+						m.initializingSprints = true
+						m.textInput.Placeholder = "How many sprints? (1-8)"
+						m.textInput.Reset()
+						m.textInput.Focus()
+						m.passphraseHash = ""
+						m.Message = "Database cleared. Set sprint count to start."
+					}
+					m.confirmingClearDB = false
+					m.clearDBNeedsPass = false
+					m.clearDBStatus = ""
+					m.passphraseInput.Reset()
 				} else if m.changingPassphrase {
 					switch m.passphraseStage {
 					case 0:
@@ -706,7 +747,12 @@ func (m DashboardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 								break
 							}
 						}
-						m.refreshData(m.day.ID)
+						if dayID := database.CheckCurrentDay(); dayID > 0 {
+							if day, err := database.GetDay(dayID); err == nil {
+								m.day = day
+							}
+							m.refreshData(dayID)
+						}
 					}
 					m.initializingSprints, m.pendingWorkspaceID = false, 0
 					m.textInput.Reset()
@@ -824,6 +870,10 @@ func (m DashboardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 		}
+		if m.confirmingClearDB && m.clearDBNeedsPass {
+			m.passphraseInput, cmd = m.passphraseInput.Update(msg)
+			return m, cmd
+		}
 		if m.changingPassphrase {
 			switch msg := msg.(type) {
 			case tea.KeyMsg:
@@ -855,6 +905,34 @@ func (m DashboardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					}
 					m.confirmingDelete = false
 					m.confirmDeleteGoalID = 0
+					return m, nil
+				}
+			}
+		} else if m.confirmingClearDB {
+			if keyMsg, ok := msg.(tea.KeyMsg); ok {
+				switch keyMsg.String() {
+				case "c":
+					if m.clearDBNeedsPass {
+						return m, nil
+					}
+					if err := database.ClearDatabase(); err != nil {
+						m.err = err
+					} else {
+						wsID, _ := database.EnsureDefaultWorkspace()
+						m.workspaces, _ = database.GetWorkspaces()
+						m.activeWorkspaceIdx = 0
+						m.pendingWorkspaceID = wsID
+						m.initializingSprints = true
+						m.textInput.Placeholder = "How many sprints? (1-8)"
+						m.textInput.Reset()
+						m.textInput.Focus()
+						m.passphraseHash = ""
+						m.Message = "Database cleared. Set sprint count to start."
+					}
+					m.confirmingClearDB = false
+					m.clearDBNeedsPass = false
+					m.clearDBStatus = ""
+					m.passphraseInput.Reset()
 					return m, nil
 				}
 			}
@@ -1170,10 +1248,28 @@ func (m DashboardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.expandedState[target.ID] = !m.expandedState[target.ID]
 				m.refreshData(m.day.ID)
 			}
+		case "P":
+			if m.focusedColIdx < len(m.sprints) && len(m.sprints[m.focusedColIdx].Goals) > m.focusedGoalIdx {
+				target := m.sprints[m.focusedColIdx].Goals[m.focusedGoalIdx]
+				next := target.Priority + 1
+				if next < 1 || next > 5 {
+					next = 1
+				}
+				_ = database.UpdateGoalPriority(target.ID, next)
+				m.refreshData(m.day.ID)
+			}
 		case "ctrl+j":
 			m.journaling, m.editingGoalID = true, 0
 			m.journalInput.Placeholder = "Log your thoughts..."
 			m.journalInput.Focus()
+			return m, nil
+		case "ctrl+e":
+			path, err := ExportVault(m.passphraseHash)
+			if err != nil {
+				m.Message = fmt.Sprintf("Export failed: %v", err)
+			} else {
+				m.Message = fmt.Sprintf("Export saved: %s", path)
+			}
 			return m, nil
 		case "J":
 			if m.focusedColIdx < len(m.sprints) && len(m.sprints[m.focusedColIdx].Goals) > m.focusedGoalIdx {
@@ -1267,6 +1363,35 @@ func (m DashboardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.depCursor = 0
 				return m, nil
 			}
+		case "C":
+			m.confirmingClearDB = true
+			m.clearDBNeedsPass = m.passphraseHash != ""
+			m.clearDBStatus = ""
+			m.passphraseInput.Reset()
+			m.passphraseInput.Placeholder = "Passphrase"
+			m.passphraseInput.Focus()
+			return m, nil
+		case "I":
+			if len(m.workspaces) > 0 {
+				activeWS := m.workspaces[m.activeWorkspaceIdx]
+				seedPath, err := EnsureSeedFile()
+				if err != nil {
+					m.Message = fmt.Sprintf("Seed file error: %v", err)
+					return m, nil
+				}
+				count, _, err := ImportSeed(seedPath, activeWS.ID, m.day.ID)
+				if err != nil {
+					m.Message = fmt.Sprintf("Seed import failed: %v", err)
+					return m, nil
+				}
+				if count == 0 {
+					m.Message = "Seed already imported."
+				} else {
+					m.Message = fmt.Sprintf("Imported %d tasks from seed.", count)
+				}
+				m.refreshData(m.day.ID)
+			}
+			return m, nil
 		case "p":
 			m.changingPassphrase = true
 			m.passphraseStatus = ""
@@ -1642,6 +1767,19 @@ func (m DashboardModel) View() string {
 		footerContent = CurrentTheme.Dim.Render("[Tab] Next | [Space] Toggle | [Enter] Save | [Esc] Cancel")
 	} else if m.confirmingDelete {
 		footerContent = CurrentTheme.Focused.Render("Delete task? [d] Delete | [a] Archive | [Esc] Cancel")
+	} else if m.confirmingClearDB {
+		var lines []string
+		lines = append(lines, CurrentTheme.Focused.Render("Clear database? This deletes all data."))
+		if m.clearDBStatus != "" {
+			lines = append(lines, CurrentTheme.Break.Render(m.clearDBStatus))
+		}
+		if m.clearDBNeedsPass {
+			lines = append(lines, CurrentTheme.Dim.Render("Enter passphrase to confirm:"))
+			lines = append(lines, CurrentTheme.Focused.Render("> ")+m.passphraseInput.View())
+		} else {
+			lines = append(lines, CurrentTheme.Dim.Render("[c] Clear | [Esc] Cancel"))
+		}
+		footerContent = lipgloss.JoinVertical(lipgloss.Left, lines...)
 	} else if m.changingPassphrase {
 		footerContent = CurrentTheme.Dim.Render("[Enter] Next | [Esc] Cancel")
 	} else if m.journaling {
@@ -1651,14 +1789,14 @@ func (m DashboardModel) View() string {
 	} else if m.movingGoal {
 		footerContent = CurrentTheme.Focused.Render("MOVE TO: [0] Backlog | [1-8] Sprint # | [Esc] Cancel")
 	} else {
-		baseHelp := "[n]New|[N]Sub|[e]Edit|[z]Toggle|[w]Cycle|[W]New WS|[t]Tag|[m]Move|[D]Deps|[R]Repeat|[/]Search|[J]Journal|[p]Passphrase|[d]Delete|[A]Archive|[u]Unarchive|[L]Lock|[b]Backlog|[c]Completed|[a]Archived|[v]View|[T]Theme"
+		baseHelp := "[n]New|[N]Sub|[e]Edit|[z]Toggle|[P]Priority|[w]Cycle|[W]New WS|[t]Tag|[m]Move|[D]Deps|[R]Repeat|[/]Search|[J]Journal|[I]Import|[p]Passphrase|[d]Delete|[A]Archive|[u]Unarchive|[L]Lock|[C]Clear DB|[b]Backlog|[c]Completed|[a]Archived|[v]View|[T]Theme"
 		var timerHelp string
 		if m.activeSprint != nil {
 			timerHelp = "|[s]PAUSE|[x]STOP"
 		} else {
 			timerHelp = "|[s]Start"
 		}
-		fullHelp := baseHelp + timerHelp + "|[ctrl+r]Report|[q]Quit"
+		fullHelp := baseHelp + timerHelp + "|[ctrl+e]Export|[ctrl+r]Report|[q]Quit"
 		rawFooter = fullHelp
 		footerContent = CurrentTheme.Dim.Render(fullHelp)
 	}
@@ -1672,7 +1810,7 @@ func (m DashboardModel) View() string {
 			innerWidth = 1
 		}
 		content := footerContent
-		if !m.creatingGoal && !m.editingGoal && !m.creatingWorkspace && !m.initializingSprints && !m.tagging && !m.themePicking && !m.depPicking && !m.settingRecurrence && !m.confirmingDelete && !m.changingPassphrase {
+		if !m.creatingGoal && !m.editingGoal && !m.creatingWorkspace && !m.initializingSprints && !m.tagging && !m.themePicking && !m.depPicking && !m.settingRecurrence && !m.confirmingDelete && !m.confirmingClearDB && !m.changingPassphrase {
 			tokens := strings.Split(rawFooter, "|")
 			const sep = " | "
 			sepWidth := ansi.StringWidth(sep)
@@ -1740,12 +1878,14 @@ func (m DashboardModel) View() string {
 				}
 				content = lipgloss.JoinVertical(lipgloss.Left, footerHelpLines...)
 			}
-		} else if !m.confirmingDelete && !m.changingPassphrase && (m.creatingGoal || m.editingGoal || m.creatingWorkspace || m.initializingSprints || m.tagging || m.themePicking || m.depPicking || m.settingRecurrence) {
+		} else if !m.confirmingDelete && !m.confirmingClearDB && !m.changingPassphrase && (m.creatingGoal || m.editingGoal || m.creatingWorkspace || m.initializingSprints || m.tagging || m.themePicking || m.depPicking || m.settingRecurrence) {
 			content = footerContent
 		} else if m.changingPassphrase {
 			content = lipgloss.PlaceHorizontal(innerWidth, lipgloss.Center, footerContent)
 		} else if m.confirmingDelete {
 			content = lipgloss.PlaceHorizontal(innerWidth, lipgloss.Center, footerContent)
+		} else if m.confirmingClearDB {
+			content = footerContent
 		}
 		footer = boxed.Width(innerWidth).Render(content)
 	}
@@ -2327,7 +2467,11 @@ func (m DashboardModel) View() string {
 						prefix = fmt.Sprintf("%s%s ", strings.Repeat("  ", g.Level), prefix)
 
 						// Goal Description
-						rawLine := fmt.Sprintf("%s%s #%d", prefix, g.Description, g.ID)
+						priority := g.Priority
+						if priority == 0 {
+							priority = 3
+						}
+						rawLine := fmt.Sprintf("%s[P%d] %s #%d", prefix, priority, g.Description, g.ID)
 						isFocused := realIdx == m.focusedColIdx && j == m.focusedGoalIdx
 						lead := "  "
 						base := CurrentTheme.Goal.Copy()
