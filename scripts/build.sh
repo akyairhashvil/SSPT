@@ -19,7 +19,20 @@ echo "$num" > "$build_file"
 export GOCACHE="$root_dir/.gocache"
 export GOMODCACHE="$root_dir/.gomodcache"
 
-go build -ldflags "-X github.com/akyairhashvil/SSPT/internal/tui.AppVersion=$num" \
+build_tags=()
+if [[ "${1:-}" == "--sqlcipher" ]]; then
+  export CGO_ENABLED=1
+  export CGO_CFLAGS="${CGO_CFLAGS:-} -I/usr/include/sqlcipher"
+  export CGO_LDFLAGS="${CGO_LDFLAGS:-} -lsqlcipher"
+  build_tags+=("sqlcipher" "libsqlite3")
+fi
+
+tags_arg=()
+if [[ ${#build_tags[@]} -gt 0 ]]; then
+  tags_arg=(-tags "$(IFS=,; echo "${build_tags[*]}")")
+fi
+
+go build "${tags_arg[@]}" -ldflags "-X github.com/akyairhashvil/SSPT/internal/tui.AppVersion=$num" \
   -o "$root_dir/sspt" \
   "$root_dir/cmd/app/main.go"
 

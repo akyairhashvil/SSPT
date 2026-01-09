@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"fmt"
+	"math"
 	"sort"
 	"strconv"
 	"strings"
@@ -349,6 +350,13 @@ func parseYear(dateStr string) int {
 	return time.Now().Year()
 }
 
+func renderLogo() string {
+	return lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Bold(true).Render("S") +
+		lipgloss.NewStyle().Foreground(lipgloss.Color("46")).Bold(true).Render("S") +
+		lipgloss.NewStyle().Foreground(lipgloss.Color("33")).Bold(true).Render("P") +
+		lipgloss.NewStyle().Foreground(lipgloss.Color("226")).Bold(true).Render("T")
+}
+
 func monthDayLimit(month string, year int) int {
 	switch month {
 	case "apr", "jun", "sep", "nov":
@@ -486,12 +494,35 @@ func (m DashboardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						m.passphraseInput.Focus()
 						return m, nil
 					}
+					_, encrypted, _ := database.EncryptionStatus()
+					if !encrypted {
+						if err := database.EncryptDatabase(entered); err != nil && err != database.ErrSQLCipherUnavailable {
+							if !database.DatabaseHasData() {
+								if recErr := database.RecreateEncryptedDatabase(entered); recErr != nil {
+									m.lockMessage = fmt.Sprintf("Failed to encrypt database: %v", recErr)
+									m.passphraseInput.Reset()
+									m.passphraseInput.Focus()
+									return m, nil
+								}
+							} else {
+								m.lockMessage = fmt.Sprintf("Failed to encrypt database: %v", err)
+								m.passphraseInput.Reset()
+								m.passphraseInput.Focus()
+								return m, nil
+							}
+						} else if err == database.ErrSQLCipherUnavailable {
+							m.lockMessage = "SQLCipher unavailable; UI-only lock"
+						}
+					}
 					m.passphraseHash = hashPassphrase(entered)
 					_ = database.SetSetting("passphrase_hash", m.passphraseHash)
 					m.locked = false
 					m.lockMessage = ""
 					m.passphraseInput.Reset()
 					m.lastInput = time.Now()
+					if m.day.ID > 0 {
+						m.refreshData(m.day.ID)
+					}
 					return m, nil
 				}
 				if entered != "" && hashPassphrase(entered) == m.passphraseHash {
@@ -587,6 +618,35 @@ func (m DashboardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 							m.passphraseConfirm.Focus()
 							return m, nil
 						}
+						_, encrypted, _ := database.EncryptionStatus()
+						if encrypted {
+							if err := database.RekeyDB(next); err != nil && err != database.ErrSQLCipherUnavailable {
+								m.passphraseStatus = fmt.Sprintf("Failed to update DB encryption: %v", err)
+								m.passphraseConfirm.Reset()
+								m.passphraseConfirm.Focus()
+								return m, nil
+							} else if err == database.ErrSQLCipherUnavailable {
+								m.passphraseStatus = "SQLCipher unavailable; UI-only lock"
+							}
+						} else {
+							if err := database.EncryptDatabase(next); err != nil && err != database.ErrSQLCipherUnavailable {
+								if !database.DatabaseHasData() {
+									if recErr := database.RecreateEncryptedDatabase(next); recErr != nil {
+										m.passphraseStatus = fmt.Sprintf("Failed to update DB encryption: %v", recErr)
+										m.passphraseConfirm.Reset()
+										m.passphraseConfirm.Focus()
+										return m, nil
+									}
+								} else {
+									m.passphraseStatus = fmt.Sprintf("Failed to update DB encryption: %v", err)
+									m.passphraseConfirm.Reset()
+									m.passphraseConfirm.Focus()
+									return m, nil
+								}
+							} else if err == database.ErrSQLCipherUnavailable {
+								m.passphraseStatus = "SQLCipher unavailable; UI-only lock"
+							}
+						}
 						m.passphraseHash = hashPassphrase(next)
 						_ = database.SetSetting("passphrase_hash", m.passphraseHash)
 						m.changingPassphrase = false
@@ -596,6 +656,9 @@ func (m DashboardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						m.passphraseNew.Reset()
 						m.passphraseConfirm.Reset()
 						m.Message = "Passphrase updated."
+						if m.day.ID > 0 {
+							m.refreshData(m.day.ID)
+						}
 						return m, nil
 					}
 				} else if m.searching {
@@ -1455,7 +1518,9 @@ func (m DashboardModel) View() string {
 		if m.passphraseHash == "" {
 			title = "Set Passphrase"
 		}
-		lockContent.WriteString(CurrentTheme.Focused.Render(title) + "\n\n")
+		logo := renderLogo()
+		lockTitle := fmt.Sprintf("%s | %s v%s", title, logo, AppVersion)
+		lockContent.WriteString(CurrentTheme.Focused.Render(lockTitle) + "\n\n")
 		if m.lockMessage != "" {
 			lockContent.WriteString(CurrentTheme.Dim.Render(m.lockMessage) + "\n")
 		}
@@ -1527,7 +1592,25 @@ func (m DashboardModel) View() string {
 		timerContent = "SSPT - Ready"
 		timerColor = CurrentTheme.Dim
 	}
-	timerContent = fmt.Sprintf("%s  |  v%s", timerContent, AppVersion)
+	cipherOn, encrypted, cipherVer := database.EncryptionStatus()
+	dbLabel := "DB: sqlite"
+	cipherLabel := "Cipher: none"
+	if cipherOn {
+		if cipherVer == "" {
+			cipherLabel = "Cipher: unknown"
+		} else {
+			cipherLabel = "Cipher: " + cipherVer
+		}
+		if encrypted {
+			dbLabel = "DB: enc"
+		} else {
+			dbLabel = "DB: plain"
+		}
+	} else if encrypted {
+		dbLabel = "DB: enc"
+	}
+	logo := renderLogo()
+	timerContent = fmt.Sprintf("%s  |  %s  |  %s  |  %s v%s", timerContent, dbLabel, cipherLabel, logo, AppVersion)
 
 	// 2. Render Header (Timer Box)
 	headerFrame := lipgloss.NewStyle().
@@ -1591,32 +1674,72 @@ func (m DashboardModel) View() string {
 		content := footerContent
 		if !m.creatingGoal && !m.editingGoal && !m.creatingWorkspace && !m.initializingSprints && !m.tagging && !m.themePicking && !m.depPicking && !m.settingRecurrence && !m.confirmingDelete && !m.changingPassphrase {
 			tokens := strings.Split(rawFooter, "|")
+			const sep = " | "
+			sepWidth := ansi.StringWidth(sep)
+			var widths []int
+			sumWidths := 0
 			var lines []string
-			var current string
+			var currentTokens []string
+			currentWidth := 0
 			for _, token := range tokens {
 				token = strings.TrimSpace(token)
 				if token == "" {
 					continue
 				}
-				if current == "" {
-					current = token
-					continue
+				w := ansi.StringWidth(token)
+				widths = append(widths, w)
+				sumWidths += w
+			}
+			if len(widths) == 0 {
+				content = ""
+			} else {
+				totalWidth := sumWidths + sepWidth*(len(widths)-1)
+				linesTarget := int(math.Ceil(float64(totalWidth) / float64(innerWidth)))
+				if linesTarget < 1 {
+					linesTarget = 1
 				}
-				candidate := current + " | " + token
-				if ansi.StringWidth(candidate) > innerWidth {
-					lines = append(lines, current)
-					current = token
-				} else {
-					current = candidate
+				sumRemaining := sumWidths
+				tokensRemaining := len(widths)
+				linesRemaining := linesTarget
+				idx := 0
+				for _, token := range tokens {
+					token = strings.TrimSpace(token)
+					if token == "" {
+						continue
+					}
+					tokenWidth := widths[idx]
+					remainingTotal := sumRemaining + sepWidth*(tokensRemaining-1)
+					idealMax := int(math.Ceil(float64(remainingTotal) / float64(linesRemaining)))
+					if idealMax > innerWidth {
+						idealMax = innerWidth
+					}
+					if currentWidth == 0 {
+						currentTokens = append(currentTokens, token)
+						currentWidth = tokenWidth
+					} else {
+						candidateWidth := currentWidth + sepWidth + tokenWidth
+						if candidateWidth <= idealMax || linesRemaining == 1 {
+							currentTokens = append(currentTokens, token)
+							currentWidth = candidateWidth
+						} else {
+							lines = append(lines, strings.Join(currentTokens, sep))
+							linesRemaining--
+							currentTokens = []string{token}
+							currentWidth = tokenWidth
+						}
+					}
+					sumRemaining -= tokenWidth
+					tokensRemaining--
+					idx++
 				}
+				if len(currentTokens) > 0 {
+					lines = append(lines, strings.Join(currentTokens, sep))
+				}
+				for _, line := range lines {
+					footerHelpLines = append(footerHelpLines, lipgloss.PlaceHorizontal(innerWidth, lipgloss.Center, CurrentTheme.Dim.Render(line)))
+				}
+				content = lipgloss.JoinVertical(lipgloss.Left, footerHelpLines...)
 			}
-			if current != "" {
-				lines = append(lines, current)
-			}
-			for _, line := range lines {
-				footerHelpLines = append(footerHelpLines, lipgloss.PlaceHorizontal(innerWidth, lipgloss.Center, CurrentTheme.Dim.Render(line)))
-			}
-			content = lipgloss.JoinVertical(lipgloss.Left, footerHelpLines...)
 		} else if !m.confirmingDelete && !m.changingPassphrase && (m.creatingGoal || m.editingGoal || m.creatingWorkspace || m.initializingSprints || m.tagging || m.themePicking || m.depPicking || m.settingRecurrence) {
 			content = footerContent
 		} else if m.changingPassphrase {

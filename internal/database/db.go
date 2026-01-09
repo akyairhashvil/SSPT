@@ -2,8 +2,11 @@ package database
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"log"
+	"net/url"
+	"os"
 	"strings"
 	"time"
 
@@ -13,20 +16,37 @@ import (
 )
 
 var DB *sql.DB
+var dbFile string
+
+var (
+	ErrEncrypted            = errors.New("database is encrypted")
+	ErrSQLCipherUnavailable = errors.New("sqlcipher is unavailable")
+)
+
+var (
+	cipherAvailable bool
+	dbEncrypted     bool
+	cipherVersion   string
+)
 
 // InitDB initializes the database connection and schema.
-func InitDB(filepath string) {
+func InitDB(filepath, key string) error {
 	var err error
-	DB, err = sql.Open("sqlite3", filepath)
+	dbFile = filepath
+	DB, err = openDB(filepath, key)
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
-
-	if err = DB.Ping(); err != nil {
-		log.Fatal(err)
+	cipherAvailable, cipherVersion = detectSQLCipher()
+	if sqlcipherCompiled() {
+		cipherAvailable = true
+	}
+	if err := verifyDB(key); err != nil {
+		return err
 	}
 
 	createTables()
+	return nil
 }
 
 func createTables() {
@@ -174,6 +194,277 @@ func migrate() {
 		key TEXT PRIMARY KEY,
 		value TEXT
 	);`)
+}
+
+func RekeyDB(key string) error {
+	if key != "" {
+		_, _ = DB.Exec("PRAGMA key = ''")
+	}
+	_, err := DB.Exec(fmt.Sprintf("PRAGMA rekey = '%s'", escapeSQLiteString(key)))
+	if err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "no such pragma") {
+			return ErrSQLCipherUnavailable
+		}
+		return err
+	}
+	cipherAvailable, cipherVersion = detectSQLCipher()
+	if sqlcipherCompiled() {
+		cipherAvailable = true
+	}
+	if key != "" && dbFile != "" {
+		enc, encErr := isEncryptedFile(dbFile)
+		if encErr != nil {
+			return encErr
+		}
+		if !enc {
+			return fmt.Errorf("rekey did not encrypt database")
+		}
+	}
+	dbEncrypted = key != ""
+	return nil
+}
+
+func EncryptDatabase(key string) error {
+	if key == "" {
+		return fmt.Errorf("passphrase required")
+	}
+	if dbFile == "" {
+		return fmt.Errorf("database path unavailable")
+	}
+	if !sqlcipherCompiled() {
+		return ErrSQLCipherUnavailable
+	}
+	if err := DB.Close(); err != nil {
+		return err
+	}
+
+	tempPath := dbFile + ".enc"
+	backupPath := dbFile + ".bak"
+	_ = os.Remove(tempPath)
+	_ = os.Remove(backupPath)
+
+	// Open plaintext DB without a key.
+	plainDB, err := sql.Open("sqlite3", dbFile)
+	if err != nil {
+		return err
+	}
+
+	if err := plainDB.Ping(); err != nil {
+		_ = plainDB.Close()
+		return fmt.Errorf("plaintext ping failed: %w", err)
+	}
+	var count int
+	if err := plainDB.QueryRow("SELECT COUNT(1) FROM sqlite_master").Scan(&count); err != nil {
+		_ = plainDB.Close()
+		return fmt.Errorf("plaintext check failed: %w", err)
+	}
+
+	if _, err := plainDB.Exec("ATTACH DATABASE ':memory:' AS probe"); err == nil {
+		_, _ = plainDB.Exec("DETACH DATABASE probe")
+	}
+	attach := fmt.Sprintf("ATTACH DATABASE '%s' AS enc KEY '%s'", escapeSQLiteString(tempPath), escapeSQLiteString(key))
+	if _, err := plainDB.Exec(attach); err != nil {
+		_ = plainDB.Close()
+		return fmt.Errorf("attach encrypted failed: %w", err)
+	}
+	if _, err := plainDB.Exec("SELECT sqlcipher_export('enc')"); err != nil {
+		_, _ = plainDB.Exec("DETACH DATABASE enc")
+		_ = plainDB.Close()
+		return fmt.Errorf("sqlcipher_export failed: %w", err)
+	}
+	if _, err := plainDB.Exec("DETACH DATABASE enc"); err != nil {
+		_ = plainDB.Close()
+		return fmt.Errorf("detach encrypted failed: %w", err)
+	}
+	if err := plainDB.Close(); err != nil {
+		return fmt.Errorf("plaintext close failed: %w", err)
+	}
+
+	if enc, encErr := isEncryptedFile(tempPath); encErr == nil && !enc {
+		return fmt.Errorf("export produced plaintext (encryption not applied)")
+	} else if encErr != nil {
+		return fmt.Errorf("encrypted probe failed: %w", encErr)
+	}
+
+	encDB, err := openDB(tempPath, key)
+	if err != nil {
+		return fmt.Errorf("encrypted open failed: %w", err)
+	}
+	if _, err := encDB.Exec("PRAGMA cipher_migrate"); err != nil {
+		_ = encDB.Close()
+		return fmt.Errorf("encrypted migrate failed: %w", err)
+	}
+	if err := encDB.QueryRow("SELECT COUNT(1) FROM sqlite_master").Scan(&count); err != nil {
+		_ = encDB.Close()
+		return fmt.Errorf("encrypted verify failed: %w", err)
+	}
+	if err := encDB.Close(); err != nil {
+		return fmt.Errorf("encrypted close failed: %w", err)
+	}
+
+	if err := os.Rename(dbFile, backupPath); err != nil {
+		return fmt.Errorf("backup rename failed: %w", err)
+	}
+	if err := os.Rename(tempPath, dbFile); err != nil {
+		_ = os.Rename(backupPath, dbFile)
+		_ = os.Remove(tempPath)
+		return fmt.Errorf("encrypted rename failed: %w", err)
+	}
+	if err := InitDB(dbFile, key); err != nil {
+		_ = os.Rename(dbFile, tempPath)
+		_ = os.Rename(backupPath, dbFile)
+		_ = os.Remove(tempPath)
+		return fmt.Errorf("reopen encrypted failed: %w", err)
+	}
+	_ = os.Remove(backupPath)
+	_ = os.Remove(tempPath)
+	return nil
+}
+
+func openDB(filepath, key string) (*sql.DB, error) {
+	dsn := filepath
+	if sqlcipherCompiled() {
+		dsn = fmt.Sprintf("file:%s?mode=rwc&cache=shared", filepath)
+		if key != "" {
+			dsn = dsn + "&_key=" + url.QueryEscape(key)
+		}
+	}
+	db, err := sql.Open("sqlite3", dsn)
+	if err != nil {
+		return nil, err
+	}
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
+	db.SetConnMaxLifetime(0)
+	return db, nil
+}
+
+func verifyDB(key string) error {
+	var count int
+	err := DB.QueryRow("SELECT COUNT(1) FROM sqlite_master").Scan(&count)
+	if err == nil {
+		if key != "" {
+			dbEncrypted = true
+		} else if dbFile != "" {
+			if enc, encErr := isEncryptedFile(dbFile); encErr == nil {
+				dbEncrypted = enc
+			}
+		}
+		return nil
+	}
+	msg := strings.ToLower(err.Error())
+	if strings.Contains(msg, "file is encrypted") || strings.Contains(msg, "not a database") {
+		if key == "" {
+			dbEncrypted = true
+			return ErrEncrypted
+		}
+		return err
+	}
+	return err
+}
+
+func detectSQLCipher() (bool, string) {
+	var version string
+	err := DB.QueryRow("PRAGMA cipher_version").Scan(&version)
+	if err == nil {
+		version = strings.TrimSpace(version)
+		if version != "" {
+			return true, version
+		}
+	}
+	rows, err := DB.Query("PRAGMA compile_options")
+	if err != nil {
+		return false, ""
+	}
+	defer rows.Close()
+	hasCodec := false
+	for rows.Next() {
+		var opt string
+		if scanErr := rows.Scan(&opt); scanErr != nil {
+			continue
+		}
+		opt = strings.ToUpper(opt)
+		if strings.Contains(opt, "SQLCIPHER") || strings.Contains(opt, "SQLITE_HAS_CODEC") {
+			hasCodec = true
+			break
+		}
+	}
+	if hasCodec {
+		return true, ""
+	}
+	return false, ""
+}
+
+func EncryptionStatus() (bool, bool, string) {
+	return cipherAvailable, dbEncrypted, cipherVersion
+}
+
+func escapeSQLiteString(value string) string {
+	return strings.ReplaceAll(value, "'", "''")
+}
+
+func isEncryptedFile(path string) (bool, error) {
+	conn, err := sql.Open("sqlite3", path)
+	if err != nil {
+		return false, err
+	}
+	defer conn.Close()
+	var count int
+	err = conn.QueryRow("SELECT COUNT(1) FROM sqlite_master").Scan(&count)
+	if err == nil {
+		return false, nil
+	}
+	msg := strings.ToLower(err.Error())
+	if strings.Contains(msg, "file is encrypted") || strings.Contains(msg, "not a database") {
+		return true, nil
+	}
+	return false, err
+}
+
+// IsEncryptedFile reports whether the database file appears encrypted.
+func IsEncryptedFile(path string) (bool, error) {
+	return isEncryptedFile(path)
+}
+
+func DatabaseHasData() bool {
+	var count int
+	if err := DB.QueryRow("SELECT COUNT(1) FROM goals").Scan(&count); err == nil && count > 0 {
+		return true
+	}
+	if err := DB.QueryRow("SELECT COUNT(1) FROM sprints").Scan(&count); err == nil && count > 0 {
+		return true
+	}
+	if err := DB.QueryRow("SELECT COUNT(1) FROM journal_entries").Scan(&count); err == nil && count > 0 {
+		return true
+	}
+	return false
+}
+
+func RecreateEncryptedDatabase(key string) error {
+	if key == "" {
+		return fmt.Errorf("passphrase required")
+	}
+	if dbFile == "" {
+		return fmt.Errorf("database path unavailable")
+	}
+	if !sqlcipherCompiled() {
+		return ErrSQLCipherUnavailable
+	}
+	backupPath := dbFile + ".bak"
+	_ = os.Remove(backupPath)
+	if err := DB.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(dbFile, backupPath); err != nil {
+		return fmt.Errorf("backup rename failed: %w", err)
+	}
+	if err := InitDB(dbFile, key); err != nil {
+		_ = os.Remove(dbFile)
+		_ = os.Rename(backupPath, dbFile)
+		return fmt.Errorf("recreate encrypted failed: %w", err)
+	}
+	_ = os.Remove(backupPath)
+	return nil
 }
 
 // --- Settings ---
