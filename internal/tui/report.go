@@ -7,6 +7,7 @@ import (
 
 	"github.com/akyairhashvil/SSPT/internal/database"
 	"github.com/akyairhashvil/SSPT/internal/models"
+	"github.com/akyairhashvil/SSPT/internal/util"
 )
 
 // GenerateReport creates a markdown summary of the day's activity.
@@ -14,8 +15,11 @@ func GenerateReport(dayID int64, workspaceID int64) {
 	day, _ := database.GetDay(dayID)
 	sprints, _ := database.GetSprints(dayID, workspaceID)
 
-	// Ensure we have a data directory or just save to root
-	filename := fmt.Sprintf("productivity_%s.md", day.Date)
+	reportRoot := util.ReportsDir("sspt")
+	if err := os.MkdirAll(reportRoot, 0o755); err != nil {
+		return
+	}
+	filename := filepath.Join(reportRoot, fmt.Sprintf("productivity_%s.md", day.Date))
 
 	// Get absolute path for clarity in the print output
 	absPath, _ := filepath.Abs(filename)
@@ -62,7 +66,7 @@ func GenerateReport(dayID int64, workspaceID int64) {
 				relevantRoots = append(relevantRoots, root)
 			}
 		}
-		
+
 		flatGoals := Flatten(relevantRoots, 0, nil) // Expand all
 
 		timeRange := "Pending"

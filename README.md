@@ -24,20 +24,48 @@ The project is built in **Go** and utilizes the following core technologies:
 *   Go 1.21+
 *   A terminal environment (Linux/macOS recommended).
 
-### Installation
-1.  Clone the repository:
-    ```bash
-    git clone https://github.com/akyairhashvil/SSPT.git
-    cd SSPT
-    ```
-2.  Build the binary:
-    ```bash
-    go build -o sspt cmd/app/main.go
-    ```
-3.  Run the application:
-    ```bash
-    ./sspt
-    ```
+### Build
+Use the build script to increment the version and produce `./sspt`:
+```bash
+./scripts/build.sh
+```
+To enable SQLCipher support (requires `libsqlcipher` installed):
+```bash
+./scripts/build.sh --sqlcipher
+```
+
+### Install
+Clone the repository:
+```bash
+git clone https://github.com/akyairhashvil/SSPT.git
+cd SSPT
+```
+
+Install system-wide (prompts for sudo):
+```bash
+./scripts/install.sh --sqlcipher
+```
+
+Install for the current user only:
+```bash
+./scripts/install.sh --user --sqlcipher
+```
+
+### Uninstall
+System-wide:
+```bash
+./scripts/uninstall.sh
+```
+
+User-only:
+```bash
+./scripts/uninstall.sh --user
+```
+
+### Run
+```bash
+sspt
+```
 
 ## Contributing
 

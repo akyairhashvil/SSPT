@@ -2,10 +2,12 @@ package tui
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 
 	"github.com/akyairhashvil/SSPT/internal/database"
 	"github.com/akyairhashvil/SSPT/internal/models"
+	"github.com/akyairhashvil/SSPT/internal/util"
 	"github.com/go-pdf/fpdf"
 )
 
@@ -105,7 +107,11 @@ func GeneratePDFReport(dayID int64, workspaceID int64) {
 		}
 	}
 
-	filename := fmt.Sprintf("report_%s.pdf", day.Date)
+	reportRoot := util.ReportsDir("sspt")
+	if err := os.MkdirAll(reportRoot, 0o755); err != nil {
+		return
+	}
+	filename := filepath.Join(reportRoot, fmt.Sprintf("report_%s.pdf", day.Date))
 	err := pdf.OutputFileAndClose(filename)
 
 	absPath, _ := filepath.Abs(filename)

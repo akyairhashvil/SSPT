@@ -5,18 +5,21 @@ import (
 	"encoding/hex"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/akyairhashvil/SSPT/internal/database"
 	"github.com/akyairhashvil/SSPT/internal/tui"
+	"github.com/akyairhashvil/SSPT/internal/util"
 	tea "github.com/charmbracelet/bubbletea"
 	"golang.org/x/term"
 )
 
 func main() {
 	// 1. Initialize Database
-	// We use a local file 'sprints.db' in the current directory for now.
-	dbPath := "sprints.db"
+	dbRoot := util.DataDir("sspt")
+	_ = os.MkdirAll(dbRoot, 0o755)
+	dbPath := filepath.Join(dbRoot, "sprints.db")
 	key := strings.TrimSpace(os.Getenv("SSPT_DB_KEY"))
 	_, statErr := os.Stat(dbPath)
 	dbExists := statErr == nil
