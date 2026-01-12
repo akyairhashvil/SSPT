@@ -54,6 +54,9 @@ type ExportGoal struct {
 	CreatedAt      string   `json:"created_at"`
 	CompletedAt    *string  `json:"completed_at,omitempty"`
 	ArchivedAt     *string  `json:"archived_at,omitempty"`
+	TaskStartedAt  *string  `json:"task_started_at,omitempty"`
+	TaskElapsedSec int      `json:"task_elapsed_seconds,omitempty"`
+	TaskActive     bool     `json:"task_active,omitempty"`
 }
 
 type ExportJournalEntry struct {
@@ -73,7 +76,15 @@ type ExportTaskDep struct {
 }
 
 func GetAllDays() ([]ExportDay, error) {
-	rows, err := DB.Query("SELECT id, date, started_at FROM days ORDER BY id ASC")
+	d, err := getDefaultDB()
+	if err != nil {
+		return nil, err
+	}
+	return d.GetAllDays()
+}
+
+func (d *Database) GetAllDays() ([]ExportDay, error) {
+	rows, err := d.DB.Query("SELECT id, date, started_at FROM days ORDER BY id ASC")
 	if err != nil {
 		return nil, err
 	}
@@ -93,7 +104,15 @@ func GetAllDays() ([]ExportDay, error) {
 }
 
 func GetAllSprintsFlat() ([]ExportSprint, error) {
-	rows, err := DB.Query(`
+	d, err := getDefaultDB()
+	if err != nil {
+		return nil, err
+	}
+	return d.GetAllSprintsFlat()
+}
+
+func (d *Database) GetAllSprintsFlat() ([]ExportSprint, error) {
+	rows, err := d.DB.Query(`
 		SELECT id, day_id, workspace_id, sprint_number, status, start_time, end_time, last_paused_at, elapsed_seconds
 		FROM sprints ORDER BY id ASC`)
 	if err != nil {
@@ -131,8 +150,16 @@ func GetAllSprintsFlat() ([]ExportSprint, error) {
 }
 
 func GetAllGoalsExport() ([]ExportGoal, error) {
-	rows, err := DB.Query(`
-		SELECT id, parent_id, workspace_id, sprint_id, description, notes, status, priority, effort, tags, recurrence_rule, links, rank, created_at, completed_at, archived_at
+	d, err := getDefaultDB()
+	if err != nil {
+		return nil, err
+	}
+	return d.GetAllGoalsExport()
+}
+
+func (d *Database) GetAllGoalsExport() ([]ExportGoal, error) {
+	rows, err := d.DB.Query(`
+		SELECT id, parent_id, workspace_id, sprint_id, description, notes, status, priority, effort, tags, recurrence_rule, links, rank, created_at, completed_at, archived_at, task_started_at, task_elapsed_seconds, task_active
 		FROM goals ORDER BY id ASC`)
 	if err != nil {
 		return nil, err
@@ -144,8 +171,9 @@ func GetAllGoalsExport() ([]ExportGoal, error) {
 		var g ExportGoal
 		var parentID, workspaceID, sprintID sql.NullInt64
 		var notes, effort, recurrence, tags, links sql.NullString
-		var completedAt, archivedAt sql.NullTime
-		if err := rows.Scan(&g.ID, &parentID, &workspaceID, &sprintID, &g.Description, &notes, &g.Status, &g.Priority, &effort, &tags, &recurrence, &links, &g.Rank, &g.CreatedAt, &completedAt, &archivedAt); err != nil {
+		var completedAt, archivedAt, taskStarted sql.NullTime
+		var taskActive int
+		if err := rows.Scan(&g.ID, &parentID, &workspaceID, &sprintID, &g.Description, &notes, &g.Status, &g.Priority, &effort, &tags, &recurrence, &links, &g.Rank, &g.CreatedAt, &completedAt, &archivedAt, &taskStarted, &g.TaskElapsedSec, &taskActive); err != nil {
 			return nil, err
 		}
 		if parentID.Valid {
@@ -186,13 +214,26 @@ func GetAllGoalsExport() ([]ExportGoal, error) {
 			val := archivedAt.Time.Format(time.RFC3339)
 			g.ArchivedAt = &val
 		}
+		if taskStarted.Valid {
+			val := taskStarted.Time.Format(time.RFC3339)
+			g.TaskStartedAt = &val
+		}
+		g.TaskActive = taskActive == 1
 		out = append(out, g)
 	}
 	return out, nil
 }
 
 func GetAllJournalEntriesExport() ([]ExportJournalEntry, error) {
-	rows, err := DB.Query(`
+	d, err := getDefaultDB()
+	if err != nil {
+		return nil, err
+	}
+	return d.GetAllJournalEntriesExport()
+}
+
+func (d *Database) GetAllJournalEntriesExport() ([]ExportJournalEntry, error) {
+	rows, err := d.DB.Query(`
 		SELECT id, day_id, workspace_id, sprint_id, goal_id, content, tags, created_at
 		FROM journal_entries ORDER BY id ASC`)
 	if err != nil {
@@ -229,7 +270,15 @@ func GetAllJournalEntriesExport() ([]ExportJournalEntry, error) {
 }
 
 func GetAllTaskDeps() ([]ExportTaskDep, error) {
-	rows, err := DB.Query(`SELECT goal_id, depends_on_id FROM task_deps ORDER BY goal_id ASC`)
+	d, err := getDefaultDB()
+	if err != nil {
+		return nil, err
+	}
+	return d.GetAllTaskDeps()
+}
+
+func (d *Database) GetAllTaskDeps() ([]ExportTaskDep, error) {
+	rows, err := d.DB.Query(`SELECT goal_id, depends_on_id FROM task_deps ORDER BY goal_id ASC`)
 	if err != nil {
 		return nil, err
 	}

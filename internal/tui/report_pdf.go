@@ -11,9 +11,15 @@ import (
 	"github.com/go-pdf/fpdf"
 )
 
-func GeneratePDFReport(dayID int64, workspaceID int64) {
-	day, _ := database.GetDay(dayID)
-	sprints, _ := database.GetSprints(dayID, workspaceID)
+func GeneratePDFReport(dayID int64, workspaceID int64) (string, error) {
+	day, err := database.GetDay(dayID)
+	if err != nil {
+		return "", err
+	}
+	sprints, err := database.GetSprints(dayID, workspaceID)
+	if err != nil {
+		return "", err
+	}
 
 	pdf := fpdf.New("P", "mm", "A4", "")
 	pdf.AddPage()
@@ -26,7 +32,10 @@ func GeneratePDFReport(dayID int64, workspaceID int64) {
 	totalCompleted := 0
 
 	// Fetch ALL goals to build complete context
-	allGoals, _ := database.GetAllGoals()
+	allGoals, err := database.GetAllGoals()
+	if err != nil {
+		return "", err
+	}
 	masterTree := BuildHierarchy(allGoals)
 
 	// Helper to check relevancy
@@ -43,6 +52,16 @@ func GeneratePDFReport(dayID int64, workspaceID int64) {
 		return false
 	}
 
+	formatElapsed := func(seconds int) string {
+		if seconds <= 0 {
+			return ""
+		}
+		h := seconds / 3600
+		m := (seconds % 3600) / 60
+		s := seconds % 60
+		return fmt.Sprintf(" [time %02d:%02d:%02d]", h, m, s)
+	}
+
 	for _, s := range sprints {
 		// Filter MasterTree for this sprint
 		var relevantRoots []models.Goal
@@ -51,7 +70,7 @@ func GeneratePDFReport(dayID int64, workspaceID int64) {
 				relevantRoots = append(relevantRoots, root)
 			}
 		}
-		flatGoals := Flatten(relevantRoots, 0, nil)
+		flatGoals := Flatten(relevantRoots, 0, nil, 0)
 
 		// Header
 		pdf.SetFont("Arial", "B", 14)
@@ -81,7 +100,7 @@ func GeneratePDFReport(dayID int64, workspaceID int64) {
 			for k := 0; k < g.Level; k++ {
 				indent += "    "
 			}
-			pdf.Cell(0, 8, fmt.Sprintf("%s  %s %s", indent, status, g.Description))
+			pdf.Cell(0, 8, fmt.Sprintf("%s  %s %s%s", indent, status, g.Description, formatElapsed(g.TaskElapsedSec)))
 			pdf.Ln(6)
 		}
 		pdf.Ln(4)
@@ -94,7 +113,10 @@ func GeneratePDFReport(dayID int64, workspaceID int64) {
 	pdf.Ln(10)
 
 	// Journaling
-	entries, _ := database.GetJournalEntries(dayID, workspaceID)
+	entries, err := database.GetJournalEntries(dayID, workspaceID)
+	if err != nil {
+		return "", err
+	}
 	if len(entries) > 0 {
 		pdf.SetFont("Arial", "B", 14)
 		pdf.Cell(0, 10, "Journal")
@@ -109,15 +131,16 @@ func GeneratePDFReport(dayID int64, workspaceID int64) {
 
 	reportRoot := util.ReportsDir("sspt")
 	if err := os.MkdirAll(reportRoot, 0o755); err != nil {
-		return
+		return "", err
 	}
 	filename := filepath.Join(reportRoot, fmt.Sprintf("report_%s.pdf", day.Date))
-	err := pdf.OutputFileAndClose(filename)
-
-	absPath, _ := filepath.Abs(filename)
-	if err == nil {
-		fmt.Printf("\nPDF Report generated: %s\n", absPath)
-	} else {
-		fmt.Printf("\nError generating PDF: %v\n", err)
+	if err := pdf.OutputFileAndClose(filename); err != nil {
+		return "", err
 	}
+
+	absPath, err := filepath.Abs(filename)
+	if err != nil {
+		return "", err
+	}
+	return absPath, nil
 }

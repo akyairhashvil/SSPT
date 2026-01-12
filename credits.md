@@ -7,3 +7,4 @@ MVP Design:
 Development:
   - Google gemini-cli
   - OpenAI Codex
+  - Claude Code

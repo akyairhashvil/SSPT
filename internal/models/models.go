@@ -66,6 +66,9 @@ type Goal struct {
 	CreatedAt      time.Time
 	CompletedAt    sql.NullTime
 	ArchivedAt     sql.NullTime
+	TaskStartedAt  sql.NullTime
+	TaskElapsedSec int
+	TaskActive     bool
 
 	// UI Helper fields (not in DB)
 	Subtasks []Goal

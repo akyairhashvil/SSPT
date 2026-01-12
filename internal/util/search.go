@@ -24,10 +24,12 @@ var (
 // ParseSearchQuery breaks down a raw query string into its structured components.
 func ParseSearchQuery(query string) SearchQuery {
 	sq := SearchQuery{}
-	
+
 	extract := func(re *regexp.Regexp) []string {
 		matches := re.FindAllStringSubmatch(query, -1)
-		if matches == nil { return nil }
+		if matches == nil {
+			return nil
+		}
 		var values []string
 		for _, match := range matches {
 			if len(match) > 1 {

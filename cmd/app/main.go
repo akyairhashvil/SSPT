@@ -1,8 +1,7 @@
 package main
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -20,23 +19,33 @@ func main() {
 	dbRoot := util.DataDir("sspt")
 	_ = os.MkdirAll(dbRoot, 0o755)
 	dbPath := filepath.Join(dbRoot, "sprints.db")
+	cleanupStaleDBArtifacts(dbPath)
 	key := strings.TrimSpace(os.Getenv("SSPT_DB_KEY"))
 	_, statErr := os.Stat(dbPath)
 	dbExists := statErr == nil
 	if !dbExists && key == "" && database.SQLCipherCompiled() {
-		pass, perr := promptForKey("Set DB passphrase (leave empty to skip): ")
-		if perr != nil {
-			fmt.Printf("Alas, there's been an error: %v\n", perr)
-			os.Exit(1)
-		}
-		if pass != "" {
+		for {
+			pass, perr := promptForKey("Set DB passphrase (leave empty to skip): ")
+			if perr != nil {
+				fmt.Printf("Alas, there's been an error: %v\n", perr)
+				os.Exit(1)
+			}
+			if pass == "" {
+				break
+			}
+			if err := util.ValidatePassphrase(pass); err != nil {
+				fmt.Printf("Passphrase too weak: %v\n", err)
+				pass = ""
+				continue
+			}
 			key = pass
+			pass = ""
+			break
 		}
 	}
 	err := database.InitDB(dbPath, key)
 	if key != "" && err != nil {
-		errText := strings.ToLower(err.Error())
-		if strings.Contains(errText, "file is not a database") || strings.Contains(errText, "file is encrypted") {
+		if errors.Is(err, database.ErrWrongPassphrase) || errors.Is(err, database.ErrDatabaseEncrypted) || errors.Is(err, database.ErrDatabaseCorrupted) {
 			enc, encErr := database.IsEncryptedFile(dbPath)
 			if encErr == nil && !enc {
 				if database.DB != nil {
@@ -55,12 +64,11 @@ func main() {
 		}
 	}
 	if key == "" && err != nil {
-		errText := strings.ToLower(err.Error())
-		if err == database.ErrEncrypted || strings.Contains(errText, "file is not a database") || strings.Contains(errText, "file is encrypted") {
-			err = database.ErrEncrypted
+		if errors.Is(err, database.ErrDatabaseEncrypted) {
+			err = database.ErrDatabaseEncrypted
 		}
 	}
-	if err == database.ErrEncrypted && key == "" {
+	if errors.Is(err, database.ErrDatabaseEncrypted) && key == "" {
 		for tries := 0; tries < 3; tries++ {
 			pass, perr := promptForKey("Enter DB passphrase: ")
 			if perr != nil {
@@ -75,6 +83,7 @@ func main() {
 				_ = database.DB.Close()
 			}
 			err = database.InitDB(dbPath, pass)
+			pass = ""
 			if err == nil {
 				break
 			}
@@ -84,7 +93,7 @@ func main() {
 		fmt.Println("No DB passphrase provided. You can set one inside the app.")
 	}
 	if err != nil {
-		if err == database.ErrSQLCipherUnavailable {
+		if errors.Is(err, database.ErrSQLCipherUnavailable) {
 			fmt.Println("SQLCipher support is unavailable in this build. Rebuild with SQLCipher to enable encryption.")
 		} else {
 			fmt.Printf("Alas, there's been an error: %v\n", err)
@@ -92,8 +101,9 @@ func main() {
 		os.Exit(1)
 	}
 	if !dbExists && key != "" {
-		_ = database.SetSetting("passphrase_hash", hashPassphrase(key))
+		_ = database.SetSetting("passphrase_hash", util.HashPassphrase(key))
 	}
+	key = ""
 	defer database.DB.Close()
 
 	// 2. Initialize the Main Model
@@ -117,7 +127,7 @@ func promptForKey(prompt string) (string, error) {
 	return strings.TrimSpace(string(pass)), err
 }
 
-func hashPassphrase(pass string) string {
-	sum := sha256.Sum256([]byte(pass))
-	return hex.EncodeToString(sum[:])
+func cleanupStaleDBArtifacts(dbPath string) {
+	_ = os.Remove(dbPath + ".enc")
+	_ = os.Remove(dbPath + ".bak")
 }
