@@ -1,5 +1,7 @@
 .gocache/
 .gomodcache/
+.claude/
+.golangci-cache/
 sspt
 sprints.db
 AGENTS.md

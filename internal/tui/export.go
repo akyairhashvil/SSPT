@@ -37,6 +37,7 @@ type encryptedExport struct {
 	Data       string `json:"data"`
 }
 
+// ExportVault writes a JSON export of all data, optionally encrypted with a passphrase hash.
 func ExportVault(ctx context.Context, db Database, passphraseHash string) (string, error) {
 	workspaces, err := db.GetWorkspaces(ctx)
 	if err != nil {

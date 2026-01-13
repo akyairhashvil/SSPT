@@ -39,6 +39,8 @@ func JSONToTags(jsonStr string) []string {
 	if jsonStr == "" || jsonStr == "null" {
 		return []string{}
 	}
-	json.Unmarshal([]byte(jsonStr), &tags)
+	if err := json.Unmarshal([]byte(jsonStr), &tags); err != nil {
+		return []string{}
+	}
 	return tags
 }

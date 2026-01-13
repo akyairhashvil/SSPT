@@ -32,74 +32,103 @@ func (d *Database) GetGoalsForSprint(ctx context.Context, sprintID int64) ([]mod
 	return d.queryGoals(ctx, "list sprint", query, args...)
 }
 
-func (d *Database) GoalExists(ctx context.Context, workspaceID int64, sprintID int64, parentID *int64, description string) (bool, error) {
-	ctx, cancel := d.withTimeout(ctx, defaultDBTimeout)
-	defer cancel()
-	desc := strings.TrimSpace(description)
-	if desc == "" {
-		return false, nil
-	}
-	if parentID != nil {
-		var count int
-		err := d.DB.QueryRowContext(ctx,
-			"SELECT COUNT(1) FROM goals WHERE parent_id = ? AND description = ?",
-			*parentID, desc,
-		).Scan(&count)
-		return count > 0, wrapGoalErr("exists", 0, err)
-	}
-	if sprintID > 0 {
-		var count int
-		err := d.DB.QueryRowContext(ctx,
-			"SELECT COUNT(1) FROM goals WHERE workspace_id = ? AND sprint_id = ? AND parent_id IS NULL AND description = ?",
-			workspaceID, sprintID, desc,
-		).Scan(&count)
-		return count > 0, wrapGoalErr("exists", 0, err)
-	}
-	var count int
-	err := d.DB.QueryRowContext(ctx,
-		"SELECT COUNT(1) FROM goals WHERE workspace_id = ? AND sprint_id IS NULL AND parent_id IS NULL AND description = ?",
-		workspaceID, desc,
-	).Scan(&count)
-	return count > 0, wrapGoalErr("exists", 0, err)
+type ExistsCheckLevel int
+
+const (
+	ExistsCheckBasic ExistsCheckLevel = iota
+	ExistsCheckDetailed
+)
+
+type ExistsResult struct {
+	Exists     bool
+	ExistingID int64
+	MatchType  string
 }
 
-func (d *Database) GoalExistsDetailed(ctx context.Context, workspaceID int64, sprintID int64, parentID *int64, seed GoalSeed) (bool, error) {
+func (d *Database) CheckGoalExists(ctx context.Context, workspaceID int64, sprintID int64, parentID *int64, description string, level ExistsCheckLevel, seed *GoalSeed) (ExistsResult, error) {
 	ctx, cancel := d.withTimeout(ctx, defaultDBTimeout)
 	defer cancel()
-	desc, priority, effort, tags, recurrence, notes, links := normalizeSeed(seed)
+	result := ExistsResult{MatchType: "none"}
+	desc := strings.TrimSpace(description)
 	if desc == "" {
-		return false, nil
+		return result, nil
+	}
+
+	if level == ExistsCheckBasic {
+		var row *sql.Row
+		if parentID != nil {
+			row = d.DB.QueryRowContext(ctx,
+				"SELECT id FROM goals WHERE parent_id = ? AND description = ? LIMIT 1",
+				*parentID, desc,
+			)
+		} else if sprintID > 0 {
+			row = d.DB.QueryRowContext(ctx,
+				"SELECT id FROM goals WHERE workspace_id = ? AND sprint_id = ? AND parent_id IS NULL AND description = ? LIMIT 1",
+				workspaceID, sprintID, desc,
+			)
+		} else {
+			row = d.DB.QueryRowContext(ctx,
+				"SELECT id FROM goals WHERE workspace_id = ? AND sprint_id IS NULL AND parent_id IS NULL AND description = ? LIMIT 1",
+				workspaceID, desc,
+			)
+		}
+
+		var id int64
+		if err := row.Scan(&id); err != nil {
+			if err == sql.ErrNoRows {
+				return result, nil
+			}
+			return result, wrapGoalErr("exists", 0, err)
+		}
+		result.Exists = true
+		result.ExistingID = id
+		result.MatchType = "exact"
+		return result, nil
+	}
+
+	if level != ExistsCheckDetailed {
+		return result, fmt.Errorf("invalid exists check level: %d", level)
+	}
+
+	if seed == nil {
+		return result, fmt.Errorf("goal seed is required for detailed exists check")
+	}
+
+	desc, priority, effort, tags, recurrence, notes, links := normalizeSeed(*seed)
+	if desc == "" {
+		return result, nil
 	}
 
 	var rows *sql.Rows
 	var err error
 	if parentID != nil {
 		rows, err = d.DB.QueryContext(ctx,
-			"SELECT description, priority, effort, tags, recurrence_rule, notes, links FROM goals WHERE parent_id = ? AND description = ?",
+			"SELECT id, description, priority, effort, tags, recurrence_rule, notes, links FROM goals WHERE parent_id = ? AND description = ?",
 			*parentID, desc,
 		)
 	} else if sprintID > 0 {
 		rows, err = d.DB.QueryContext(ctx,
-			"SELECT description, priority, effort, tags, recurrence_rule, notes, links FROM goals WHERE workspace_id = ? AND sprint_id = ? AND parent_id IS NULL AND description = ?",
+			"SELECT id, description, priority, effort, tags, recurrence_rule, notes, links FROM goals WHERE workspace_id = ? AND sprint_id = ? AND parent_id IS NULL AND description = ?",
 			workspaceID, sprintID, desc,
 		)
 	} else {
 		rows, err = d.DB.QueryContext(ctx,
-			"SELECT description, priority, effort, tags, recurrence_rule, notes, links FROM goals WHERE workspace_id = ? AND sprint_id IS NULL AND parent_id IS NULL AND description = ?",
+			"SELECT id, description, priority, effort, tags, recurrence_rule, notes, links FROM goals WHERE workspace_id = ? AND sprint_id IS NULL AND parent_id IS NULL AND description = ?",
 			workspaceID, desc,
 		)
 	}
 	if err != nil {
-		return false, wrapGoalErr("exists", 0, err)
+		return result, wrapGoalErr("exists", 0, err)
 	}
 	defer rows.Close()
 
 	for rows.Next() {
+		var id int64
 		var dbDesc string
 		var dbPriority int
 		var dbEffort, dbTags, dbRecurrence, dbNotes, dbLinks *string
-		if err := rows.Scan(&dbDesc, &dbPriority, &dbEffort, &dbTags, &dbRecurrence, &dbNotes, &dbLinks); err != nil {
-			return false, wrapGoalErr("exists", 0, err)
+		if err := rows.Scan(&id, &dbDesc, &dbPriority, &dbEffort, &dbTags, &dbRecurrence, &dbNotes, &dbLinks); err != nil {
+			return result, wrapGoalErr("exists", 0, err)
 		}
 		dbPriority = normalizePriority(dbPriority)
 		dbEffortStr := normalizeEffort("")
@@ -124,13 +153,26 @@ func (d *Database) GoalExistsDetailed(ctx context.Context, workspaceID int64, sp
 		}
 
 		if dbDesc == desc && dbPriority == priority && dbEffortStr == effort && equalStringSlices(dbTagsList, tags) && dbRecurrenceStr == recurrence && dbNotesStr == notes && equalStringSlices(dbLinksList, links) {
-			return true, nil
+			result.Exists = true
+			result.ExistingID = id
+			result.MatchType = "exact"
+			return result, nil
 		}
 	}
 	if err := rows.Err(); err != nil {
-		return false, wrapGoalErr("exists", 0, err)
+		return result, wrapGoalErr("exists", 0, err)
 	}
-	return false, nil
+	return result, nil
+}
+
+func (d *Database) GoalExists(ctx context.Context, workspaceID int64, sprintID int64, parentID *int64, description string) (bool, error) {
+	result, err := d.CheckGoalExists(ctx, workspaceID, sprintID, parentID, description, ExistsCheckBasic, nil)
+	return result.Exists, err
+}
+
+func (d *Database) GoalExistsDetailed(ctx context.Context, workspaceID int64, sprintID int64, parentID *int64, seed GoalSeed) (bool, error) {
+	result, err := d.CheckGoalExists(ctx, workspaceID, sprintID, parentID, seed.Description, ExistsCheckDetailed, &seed)
+	return result.Exists, err
 }
 
 // GetCompletedGoalsForDay retrieves all goals completed on a specific day and workspace across all sprints.

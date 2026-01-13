@@ -173,10 +173,10 @@ func NewFrameStyles() FrameStyles {
 		Padding(1, 2)
 
 	return FrameStyles{
-		Modal:    base.Copy().BorderForeground(lipgloss.Color("62")),
-		Lock:     base.Copy().BorderForeground(lipgloss.Color("196")),
-		Dialog:   base.Copy().BorderForeground(lipgloss.Color("39")),
-		Floating: base.Copy().BorderForeground(lipgloss.Color("240")),
+		Modal:    base.BorderForeground(lipgloss.Color("62")),
+		Lock:     base.BorderForeground(lipgloss.Color("196")),
+		Dialog:   base.BorderForeground(lipgloss.Color("39")),
+		Floating: base.BorderForeground(lipgloss.Color("240")),
 	}
 }
 

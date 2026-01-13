@@ -36,7 +36,7 @@ func setupTestDashboard(t *testing.T) DashboardModel {
 	}
 
 	m := NewDashboardModel(ctx, db, dayID)
-	m.lock.Locked = false
+	m.security.lock.Locked = false
 	return m
 }
 
@@ -47,7 +47,7 @@ func TestDashboardKeyRoutingNewGoal(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected DashboardModel, got %T", model)
 	}
-	if !updated.creatingGoal {
+	if !updated.modal.creatingGoal {
 		t.Fatalf("expected creatingGoal to be true")
 	}
 }

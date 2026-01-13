@@ -426,7 +426,7 @@ func (d *Database) ImportVault(ctx context.Context, payload []byte) error {
 			 created_at, completed_at, archived_at, task_started_at, task_elapsed_seconds, task_active)
 			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			goal.ID, goal.ParentID, goal.WorkspaceID, goal.SprintID, goal.Description, goal.Notes, status,
-			goal.Priority, goal.Effort, nilIfEmpty(tags), nilIfEmptyPtr(goal.RecurrenceRule), nilIfEmpty(links),
+			goal.Priority, goal.Effort, nullableString(strings.TrimSpace(tags)), nullableString(strings.TrimSpace(toNullableString(goal.RecurrenceRule))), nullableString(strings.TrimSpace(links)),
 			goal.Rank, goal.CreatedAt, goal.CompletedAt, goal.ArchivedAt, goal.TaskStartedAt,
 			goal.TaskElapsedSec, util.BoolToInt(goal.TaskActive),
 		); err != nil {
@@ -444,7 +444,7 @@ func (d *Database) ImportVault(ctx context.Context, payload []byte) error {
 			(id, day_id, workspace_id, sprint_id, goal_id, content, tags, created_at)
 			VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 			entry.ID, entry.DayID, entry.WorkspaceID, entry.SprintID, entry.GoalID, entry.Content,
-			nilIfEmpty(tags), entry.CreatedAt,
+			nullableString(strings.TrimSpace(tags)), entry.CreatedAt,
 		); err != nil {
 			return fmt.Errorf("import journal entry %d: %w", entry.ID, err)
 		}
@@ -467,16 +467,9 @@ func (d *Database) ImportVault(ctx context.Context, payload []byte) error {
 	return nil
 }
 
-func nilIfEmpty(value string) interface{} {
-	if strings.TrimSpace(value) == "" {
-		return nil
-	}
-	return value
-}
-
-func nilIfEmptyPtr(value *string) interface{} {
-	if value == nil || strings.TrimSpace(*value) == "" {
-		return nil
+func toNullableString(value *string) string {
+	if value == nil {
+		return ""
 	}
 	return *value
 }

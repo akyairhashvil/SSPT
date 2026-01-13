@@ -41,11 +41,9 @@ func main() {
 			}
 			if err := util.ValidatePassphrase(pass); err != nil {
 				fmt.Printf("Passphrase too weak: %v\n", err)
-				pass = ""
 				continue
 			}
 			key = pass
-			pass = ""
 			break
 		}
 	}
@@ -92,7 +90,6 @@ func main() {
 				db = nil
 			}
 			db, err = database.Open(ctx, dbPath, pass)
-			pass = ""
 			if err == nil {
 				break
 			}
@@ -116,7 +113,6 @@ func main() {
 	if !dbExists && key != "" {
 		_ = db.SetSetting(ctx, "passphrase_hash", util.HashPassphrase(key))
 	}
-	key = ""
 	defer db.Close()
 
 	// 2. Initialize the Main Model

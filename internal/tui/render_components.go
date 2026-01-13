@@ -81,8 +81,8 @@ func (m DashboardModel) renderHeader() string {
 		}
 		timerColor = CurrentTheme.Dim
 
-		if m.focusedColIdx < len(m.sprints) {
-			target := m.sprints[m.focusedColIdx]
+		if m.view.focusedColIdx < len(m.sprints) {
+			target := m.sprints[m.view.focusedColIdx]
 			if target.Status == models.StatusPaused {
 				elapsed := time.Duration(target.ElapsedSeconds) * time.Second
 				rem := config.SprintDuration - elapsed
@@ -139,44 +139,44 @@ func (m DashboardModel) renderFooter() string {
 	var rawFooter string
 	hasStatusMessage := m.statusMessage != ""
 	if hasStatusMessage {
-		statusStyle := CurrentTheme.Break.Copy().Foreground(lipgloss.Color("196"))
+		statusStyle := CurrentTheme.Break.Foreground(lipgloss.Color("196"))
 		if !m.statusIsError {
-			statusStyle = CurrentTheme.Break.Copy().Foreground(lipgloss.Color("208"))
+			statusStyle = CurrentTheme.Break.Foreground(lipgloss.Color("208"))
 		}
 		footerContent = statusStyle.Render(m.statusMessage)
 	} else if m.Message != "" {
-		footerContent = CurrentTheme.Break.Copy().Foreground(lipgloss.Color("208")).Render(m.Message)
-	} else if m.creatingGoal || m.editingGoal || m.creatingWorkspace || m.initializingSprints {
-		footerContent = CurrentTheme.Input.Render(m.textInput.View())
-	} else if m.tagging {
+		footerContent = CurrentTheme.Break.Foreground(lipgloss.Color("208")).Render(m.Message)
+	} else if m.modal.creatingGoal || m.modal.editingGoal || m.modal.creatingWorkspace || m.modal.initializingSprints {
+		footerContent = CurrentTheme.Input.Render(m.inputs.textInput.View())
+	} else if m.modal.tagging {
 		footerContent = CurrentTheme.Dim.Render("[Tab] Toggle Tag | [Enter] Save | [Esc] Cancel")
-	} else if m.themePicking {
+	} else if m.modal.themePicking {
 		footerContent = CurrentTheme.Dim.Render("[Enter] Apply Theme | [Esc] Cancel")
-	} else if m.depPicking {
+	} else if m.modal.depPicking {
 		footerContent = CurrentTheme.Dim.Render("[Space] Toggle | [Enter] Save | [Esc] Cancel")
-	} else if m.settingRecurrence {
+	} else if m.modal.settingRecurrence {
 		footerContent = CurrentTheme.Dim.Render("[Tab] Next | [Space] Toggle | [Enter] Save | [Esc] Cancel")
-	} else if m.confirmingDelete {
+	} else if m.modal.confirmingDelete {
 		footerContent = CurrentTheme.Focused.Render("Delete task? [d] Delete | [a] Archive | [Esc] Cancel")
-	} else if m.confirmingClearDB {
+	} else if m.security.confirmingClearDB {
 		var lines []string
 		lines = append(lines, CurrentTheme.Focused.Render("Clear database? This deletes all data."))
-		if m.clearDBStatus != "" {
-			lines = append(lines, CurrentTheme.Break.Render(m.clearDBStatus))
+		if m.security.clearDBStatus != "" {
+			lines = append(lines, CurrentTheme.Break.Render(m.security.clearDBStatus))
 		}
-		if m.clearDBNeedsPass {
+		if m.security.clearDBNeedsPass {
 			lines = append(lines, CurrentTheme.Dim.Render("Enter passphrase to confirm:"))
-			lines = append(lines, CurrentTheme.Focused.Render("> ")+m.lock.PassphraseInput.View())
+			lines = append(lines, CurrentTheme.Focused.Render("> ")+m.security.lock.PassphraseInput.View())
 		} else {
 			lines = append(lines, CurrentTheme.Dim.Render("[c] Clear | [Esc] Cancel"))
 		}
 		footerContent = lipgloss.JoinVertical(lipgloss.Left, lines...)
-	} else if m.changingPassphrase {
+	} else if m.security.changingPassphrase {
 		footerContent = CurrentTheme.Dim.Render("[Enter] Next | [Esc] Cancel")
-	} else if m.journaling {
+	} else if m.modal.journaling {
 		// Only render journaling input in the journal pane, avoid duplicate
 		footerContent = CurrentTheme.Dim.Render("[Enter] to Save Log | [Esc] Cancel")
-	} else if m.movingGoal {
+	} else if m.modal.movingGoal {
 		footerContent = CurrentTheme.Focused.Render("MOVE TO: [0] Backlog | [1-8] Sprint # | [Esc] Cancel")
 	} else {
 		baseHelp := "[n]New|[N]Sub|[e]Edit|[z]Toggle|[T]Task|[P]Priority|[+/-]Sprint|[w]Cycle|[W]New WS|[t]Tag|[m]Move|[D]Deps|[R]Repeat|[/]Search|[J]Journal|[I]Import|[G]Graph|[p]Passphrase|[d]Delete|[A]Archive|[u]Unarchive|[L]Lock|[C]Clear DB|[b]Backlog|[c]Completed|[a]Archived|[v]View|[Y]Theme"
@@ -202,7 +202,7 @@ func (m DashboardModel) renderFooter() string {
 		content := footerContent
 		if hasStatusMessage || m.Message != "" {
 			content = lipgloss.PlaceHorizontal(innerWidth, lipgloss.Center, footerContent)
-		} else if !m.creatingGoal && !m.editingGoal && !m.creatingWorkspace && !m.initializingSprints && !m.tagging && !m.themePicking && !m.depPicking && !m.settingRecurrence && !m.confirmingDelete && !m.confirmingClearDB && !m.changingPassphrase {
+		} else if !m.modal.creatingGoal && !m.modal.editingGoal && !m.modal.creatingWorkspace && !m.modal.initializingSprints && !m.modal.tagging && !m.modal.themePicking && !m.modal.depPicking && !m.modal.settingRecurrence && !m.modal.confirmingDelete && !m.security.confirmingClearDB && !m.security.changingPassphrase {
 			tokens := strings.Split(rawFooter, "|")
 			const sep = " | "
 			sepWidth := ansi.StringWidth(sep)
@@ -270,13 +270,13 @@ func (m DashboardModel) renderFooter() string {
 				}
 				content = lipgloss.JoinVertical(lipgloss.Left, footerHelpLines...)
 			}
-		} else if !m.confirmingDelete && !m.confirmingClearDB && !m.changingPassphrase && (m.creatingGoal || m.editingGoal || m.creatingWorkspace || m.initializingSprints || m.tagging || m.themePicking || m.depPicking || m.settingRecurrence) {
+		} else if !m.modal.confirmingDelete && !m.security.confirmingClearDB && !m.security.changingPassphrase && (m.modal.creatingGoal || m.modal.editingGoal || m.modal.creatingWorkspace || m.modal.initializingSprints || m.modal.tagging || m.modal.themePicking || m.modal.depPicking || m.modal.settingRecurrence) {
 			content = footerContent
-		} else if m.changingPassphrase {
+		} else if m.security.changingPassphrase {
 			content = lipgloss.PlaceHorizontal(innerWidth, lipgloss.Center, footerContent)
-		} else if m.confirmingDelete {
+		} else if m.modal.confirmingDelete {
 			content = lipgloss.PlaceHorizontal(innerWidth, lipgloss.Center, footerContent)
-		} else if m.confirmingClearDB {
+		} else if m.security.confirmingClearDB {
 			content = footerContent
 		}
 		footer = boxed.Width(innerWidth).Render(content)
@@ -335,7 +335,7 @@ func (m DashboardModel) buildBoardLayout() boardLayout {
 	}
 	colExtraHeight := lipgloss.Height(colFrame.Render(""))
 	// Scroll Logic
-	colScrollOffset := m.colScrollOffset
+	colScrollOffset := m.view.colScrollOffset
 	if colScrollOffset > len(scrollableIndices)-displayCount {
 		colScrollOffset = len(scrollableIndices) - displayCount
 	}
@@ -368,11 +368,11 @@ func (m DashboardModel) renderBoard(height int, layout boardLayout) string {
 	if contentHeight < 0 {
 		contentHeight = 0
 	}
-	dynColStyle := layout.colFrame.Copy().
+	dynColStyle := layout.colFrame.
 		Width(layout.colContentWidth).
 		Height(contentHeight).
 		MaxHeight(contentHeight)
-	dynActiveColStyle := dynColStyle.Copy().
+	dynActiveColStyle := dynColStyle.
 		BorderForeground(CurrentTheme.Border).
 		BorderStyle(lipgloss.ThickBorder())
 
@@ -381,7 +381,7 @@ func (m DashboardModel) renderBoard(height int, layout boardLayout) string {
 		for _, realIdx := range layout.visibleIndices {
 			sprint := m.sprints[realIdx]
 			style := dynColStyle
-			if realIdx == m.focusedColIdx {
+			if realIdx == m.view.focusedColIdx {
 				style = dynActiveColStyle
 			}
 
@@ -403,7 +403,7 @@ func (m DashboardModel) renderBoard(height int, layout boardLayout) string {
 				title = "⏸ " + title
 			}
 
-			header := CurrentTheme.Header.Copy().Width(layout.colContentWidth).Render(title)
+			header := CurrentTheme.Header.Width(layout.colContentWidth).Render(title)
 			headerHeight := lipgloss.Height(header)
 
 			// Render Goals
@@ -505,14 +505,14 @@ func (m DashboardModel) renderBoard(height int, layout boardLayout) string {
 						taskSuffix = " ⏱" + formatDuration(taskElapsed(g.Goal))
 					}
 					rawLine := fmt.Sprintf("%s[P%d] %s%s #%d", prefix, priority, g.Description, taskSuffix, g.ID)
-					isFocused := realIdx == m.focusedColIdx && j == m.focusedGoalIdx
+					isFocused := realIdx == m.view.focusedColIdx && j == m.view.focusedGoalIdx
 					lead := "  "
-					base := CurrentTheme.Goal.Copy()
+					base := CurrentTheme.Goal
 					if g.Status == models.GoalStatusCompleted {
-						base = CurrentTheme.CompletedGoal.Copy()
+						base = CurrentTheme.CompletedGoal
 					}
 					if isFocused {
-						base = CurrentTheme.Focused.Copy()
+						base = CurrentTheme.Focused
 						lead = "> "
 					}
 
@@ -542,8 +542,8 @@ func (m DashboardModel) renderBoard(height int, layout boardLayout) string {
 			}
 
 			scrollStart := 0
-			if len(ranges) > 0 && realIdx == m.focusedColIdx && m.focusedGoalIdx < len(ranges) {
-				r := ranges[m.focusedGoalIdx]
+			if len(ranges) > 0 && realIdx == m.view.focusedColIdx && m.view.focusedGoalIdx < len(ranges) {
+				r := ranges[m.view.focusedGoalIdx]
 				if visibleHeight > 0 {
 					if r.end-r.start >= visibleHeight {
 						scrollStart = r.start

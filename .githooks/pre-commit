@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+root="$(git rev-parse --show-toplevel)"
+export GOCACHE="${root}/.gocache"
+export GOMODCACHE="${root}/.gomodcache"
+export GOLANGCI_LINT_CACHE="${root}/.golangci-cache"
+
+lint_bin="$(command -v golangci-lint || true)"
+if [ -z "${lint_bin}" ]; then
+  lint_bin="$(go env GOPATH)/bin/golangci-lint"
+fi
+
+if [ ! -x "${lint_bin}" ]; then
+  echo "golangci-lint not found. Install with:"
+  echo "  go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest"
+  exit 1
+fi
+
+"${lint_bin}" run ./...

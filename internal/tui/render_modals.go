@@ -12,16 +12,16 @@ import (
 func (m DashboardModel) renderLockScreen() string {
 	var lockContent strings.Builder
 	title := "Locked"
-	if m.lock.PassphraseHash == "" {
+	if m.security.lock.PassphraseHash == "" {
 		title = "Set Passphrase"
 	}
 	logo := renderLogo()
 	lockTitle := fmt.Sprintf("%s | %s v%s", title, logo, versionLabel())
 	lockContent.WriteString(CurrentTheme.Focused.Render(lockTitle) + "\n\n")
-	if m.lock.Message != "" {
-		lockContent.WriteString(CurrentTheme.Dim.Render(m.lock.Message) + "\n")
+	if m.security.lock.Message != "" {
+		lockContent.WriteString(CurrentTheme.Dim.Render(m.security.lock.Message) + "\n")
 	}
-	lockContent.WriteString(CurrentTheme.Focused.Render("> ") + m.lock.PassphraseInput.View())
+	lockContent.WriteString(CurrentTheme.Focused.Render("> ") + m.security.lock.PassphraseInput.View())
 
 	lockFrame := Frames.Lock
 	lockBox := lockFrame.Render(lockContent.String())
@@ -51,14 +51,12 @@ func (m DashboardModel) renderJournalPane() string {
 				}
 				totalAll := 0
 				completedAll := 0
-				var perSprintTotals []int
 				var perSprintCompleted []int
 				for _, id := range sprintIDs {
 					total, completed, err := m.db.GetSprintGoalCounts(m.ctx, id)
 					if err != nil {
 						continue
 					}
-					perSprintTotals = append(perSprintTotals, total)
 					perSprintCompleted = append(perSprintCompleted, completed)
 					totalAll += total
 					completedAll += completed
@@ -99,23 +97,23 @@ func (m DashboardModel) renderJournalPane() string {
 				}
 			}
 		}
-		analyticsFrame := Frames.Floating.Copy().Padding(0, 1)
+		analyticsFrame := Frames.Floating.Padding(0, 1)
 		analyticsExtraWidth := lipgloss.Width(analyticsFrame.Render(""))
 		analyticsWidth := m.width - analyticsExtraWidth
 		if analyticsWidth < 1 {
 			analyticsWidth = 1
 		}
 		journalPane = analyticsFrame.Width(analyticsWidth).Render(analyticsContent.String())
-	} else if m.changingPassphrase {
+	} else if m.security.changingPassphrase {
 		var passContent strings.Builder
 		passContent.WriteString(CurrentTheme.Focused.Render("Change Passphrase") + "\n\n")
-		if m.passphraseStatus != "" {
-			passContent.WriteString(CurrentTheme.Break.Render(m.passphraseStatus) + "\n")
+		if m.security.passphraseStatus != "" {
+			passContent.WriteString(CurrentTheme.Break.Render(m.security.passphraseStatus) + "\n")
 		}
 		currentCursor := "  "
 		newCursor := "  "
 		confirmCursor := "  "
-		switch m.passphraseStage {
+		switch m.security.passphraseStage {
 		case 0:
 			currentCursor = "> "
 		case 1:
@@ -123,87 +121,87 @@ func (m DashboardModel) renderJournalPane() string {
 		case 2:
 			confirmCursor = "> "
 		}
-		if m.lock.PassphraseHash != "" {
+		if m.security.lock.PassphraseHash != "" {
 			passContent.WriteString(CurrentTheme.Dim.Render("Current") + "\n")
-			passContent.WriteString(currentCursor + m.passphraseCurrent.View() + "\n")
+			passContent.WriteString(currentCursor + m.inputs.passphraseCurrent.View() + "\n")
 		}
 		passContent.WriteString(CurrentTheme.Dim.Render("New") + "\n")
-		passContent.WriteString(newCursor + m.passphraseNew.View() + "\n")
+		passContent.WriteString(newCursor + m.inputs.passphraseNew.View() + "\n")
 		passContent.WriteString(CurrentTheme.Dim.Render("Confirm") + "\n")
-		passContent.WriteString(confirmCursor + m.passphraseConfirm.View())
+		passContent.WriteString(confirmCursor + m.inputs.passphraseConfirm.View())
 
-		passFrame := Frames.Modal.Copy().Padding(0, 1)
+		passFrame := Frames.Modal.Padding(0, 1)
 		passExtraWidth := lipgloss.Width(passFrame.Render(""))
 		passWidth := m.width - passExtraWidth
 		if passWidth < 1 {
 			passWidth = 1
 		}
 		journalPane = passFrame.Width(passWidth).Render(passContent.String())
-	} else if m.settingRecurrence {
+	} else if m.modal.settingRecurrence {
 		var recContent strings.Builder
 		recContent.WriteString(CurrentTheme.Focused.Render("Recurrence") + "\n")
 		recContent.WriteString(CurrentTheme.Dim.Render("Tab next step | Space toggle | Enter save") + "\n\n")
 
-		if m.recurrenceFocus == "mode" {
+		if m.modal.recurrenceFocus == "mode" {
 			recContent.WriteString(CurrentTheme.Focused.Render("Frequency") + "\n")
-			for i, opt := range m.recurrenceOptions {
+			for i, opt := range m.modal.recurrenceOptions {
 				cursor := "  "
-				if i == m.recurrenceCursor {
+				if i == m.modal.recurrenceCursor {
 					cursor = "> "
 				}
 				marker := " "
-				if opt == m.recurrenceMode {
+				if opt == m.modal.recurrenceMode {
 					marker = "*"
 				}
 				recContent.WriteString(fmt.Sprintf("%s[%s] %s\n", cursor, marker, opt))
 			}
-		} else if m.recurrenceMode == "weekly" {
+		} else if m.modal.recurrenceMode == "weekly" {
 			recContent.WriteString(CurrentTheme.Dim.Render("Frequency: weekly") + "\n\n")
 			recContent.WriteString(CurrentTheme.Focused.Render("Weekdays") + "\n")
-			for i, d := range m.weekdayOptions {
+			for i, d := range m.modal.weekdayOptions {
 				cursor := "  "
-				if m.recurrenceFocus == "items" && i == m.recurrenceItemCursor {
+				if m.modal.recurrenceFocus == "items" && i == m.modal.recurrenceItemCursor {
 					cursor = "> "
 				}
 				check := "[ ]"
-				if m.recurrenceSelected[d] {
+				if m.modal.recurrenceSelected[d] {
 					check = "[x]"
 				}
 				recContent.WriteString(fmt.Sprintf("%s%s %s\n", cursor, check, d))
 			}
-		} else if m.recurrenceMode == "monthly" {
+		} else if m.modal.recurrenceMode == "monthly" {
 			recContent.WriteString(CurrentTheme.Dim.Render("Frequency: monthly") + "\n\n")
-			if m.recurrenceFocus == "items" {
+			if m.modal.recurrenceFocus == "items" {
 				recContent.WriteString(CurrentTheme.Focused.Render("Months") + "\n")
-				for i, mo := range m.monthOptions {
+				for i, mo := range m.modal.monthOptions {
 					cursor := "  "
-					if m.recurrenceFocus == "items" && i == m.recurrenceItemCursor {
+					if m.modal.recurrenceFocus == "items" && i == m.modal.recurrenceItemCursor {
 						cursor = "> "
 					}
 					check := "[ ]"
-					if m.recurrenceSelected[mo] {
+					if m.modal.recurrenceSelected[mo] {
 						check = "[x]"
 					}
 					recContent.WriteString(fmt.Sprintf("%s%s %s\n", cursor, check, mo))
 				}
-			} else if m.recurrenceFocus == "days" {
+			} else if m.modal.recurrenceFocus == "days" {
 				recContent.WriteString(CurrentTheme.Focused.Render("Days") + "\n")
 				maxDay := m.monthlyMaxDay()
 				if maxDay <= 0 {
 					recContent.WriteString(CurrentTheme.Dim.Render("  (select month(s) first)"))
 				} else {
-					if m.recurrenceDayCursor > maxDay-1 {
-						m.recurrenceDayCursor = maxDay - 1
+					if m.modal.recurrenceDayCursor > maxDay-1 {
+						m.modal.recurrenceDayCursor = maxDay - 1
 					}
 					var entries []string
 					for i := 0; i < maxDay; i++ {
-						d := m.monthDayOptions[i]
+						d := m.modal.monthDayOptions[i]
 						cursor := "  "
-						if m.recurrenceFocus == "days" && i == m.recurrenceDayCursor {
+						if m.modal.recurrenceFocus == "days" && i == m.modal.recurrenceDayCursor {
 							cursor = "> "
 						}
 						check := "[ ]"
-						if m.recurrenceSelected["day:"+d] {
+						if m.modal.recurrenceSelected["day:"+d] {
 							check = "[x]"
 						}
 						entries = append(entries, fmt.Sprintf("%s%s %2s", cursor, check, d))
@@ -233,18 +231,18 @@ func (m DashboardModel) renderJournalPane() string {
 			}
 		}
 
-		recFrame := Frames.Modal.Copy().Padding(0, 1)
+		recFrame := Frames.Modal.Padding(0, 1)
 		recExtraWidth := lipgloss.Width(recFrame.Render(""))
 		recWidth := m.width - recExtraWidth
 		if recWidth < 1 {
 			recWidth = 1
 		}
 		journalPane = recFrame.Width(recWidth).Render(recContent.String())
-	} else if m.depPicking {
+	} else if m.modal.depPicking {
 		var depContent strings.Builder
 		depContent.WriteString(CurrentTheme.Focused.Render("Dependencies") + "\n")
 		depContent.WriteString(CurrentTheme.Dim.Render("Space to toggle, Enter to save") + "\n\n")
-		if len(m.depOptions) == 0 {
+		if len(m.modal.depOptions) == 0 {
 			depContent.WriteString(CurrentTheme.Dim.Render("  (no tasks)\n"))
 		} else {
 			maxLines := m.height / 2
@@ -252,84 +250,84 @@ func (m DashboardModel) renderJournalPane() string {
 				maxLines = 6
 			}
 			start := 0
-			if m.depCursor >= maxLines {
-				start = m.depCursor - maxLines + 1
+			if m.modal.depCursor >= maxLines {
+				start = m.modal.depCursor - maxLines + 1
 			}
 			end := start + maxLines
-			if end > len(m.depOptions) {
-				end = len(m.depOptions)
+			if end > len(m.modal.depOptions) {
+				end = len(m.modal.depOptions)
 			}
 			if start > 0 {
 				depContent.WriteString(CurrentTheme.Dim.Render("  ...\n"))
 			}
 			for i := start; i < end; i++ {
-				opt := m.depOptions[i]
+				opt := m.modal.depOptions[i]
 				cursor := "  "
-				if i == m.depCursor {
+				if i == m.modal.depCursor {
 					cursor = "> "
 				}
 				check := "[ ]"
-				if m.depSelected[opt.ID] {
+				if m.modal.depSelected[opt.ID] {
 					check = "[x]"
 				}
 				depContent.WriteString(fmt.Sprintf("%s%s %s\n", cursor, check, opt.Label))
 			}
-			if end < len(m.depOptions) {
+			if end < len(m.modal.depOptions) {
 				depContent.WriteString(CurrentTheme.Dim.Render("  ...\n"))
 			}
 		}
 
-		depFrame := Frames.Modal.Copy().Padding(0, 1)
+		depFrame := Frames.Modal.Padding(0, 1)
 		depExtraWidth := lipgloss.Width(depFrame.Render(""))
 		depWidth := m.width - depExtraWidth
 		if depWidth < 1 {
 			depWidth = 1
 		}
 		journalPane = depFrame.Width(depWidth).Render(depContent.String())
-	} else if m.themePicking {
+	} else if m.modal.themePicking {
 		var themeContent strings.Builder
 		themeContent.WriteString(CurrentTheme.Focused.Render("Themes") + "\n")
 		themeContent.WriteString(CurrentTheme.Dim.Render("Use ↑/↓ to select, Enter to apply") + "\n\n")
-		if len(m.themeNames) == 0 {
+		if len(m.modal.themeNames) == 0 {
 			themeContent.WriteString(CurrentTheme.Dim.Render("  (no themes)\n"))
 		} else {
-			for i, name := range m.themeNames {
+			for i, name := range m.modal.themeNames {
 				cursor := "  "
-				if i == m.themeCursor {
+				if i == m.modal.themeCursor {
 					cursor = "> "
 				}
 				themeContent.WriteString(fmt.Sprintf("%s%s\n", cursor, name))
 			}
 		}
-		themeFrame := Frames.Modal.Copy().Padding(0, 1)
+		themeFrame := Frames.Modal.Padding(0, 1)
 		themeExtraWidth := lipgloss.Width(themeFrame.Render(""))
 		themeWidth := m.width - themeExtraWidth
 		if themeWidth < 1 {
 			themeWidth = 1
 		}
 		journalPane = themeFrame.Width(themeWidth).Render(themeContent.String())
-	} else if m.tagging {
+	} else if m.modal.tagging {
 		var tagContent strings.Builder
 		tagContent.WriteString(CurrentTheme.Focused.Render("Tags") + "\n")
 		tagContent.WriteString(CurrentTheme.Dim.Render("Use ↑/↓ to select, Tab to toggle, Enter to save") + "\n\n")
-		for i, tag := range m.defaultTags {
+		for i, tag := range m.modal.defaultTags {
 			cursor := "  "
-			if i == m.tagCursor {
+			if i == m.modal.tagCursor {
 				cursor = "> "
 			}
 			check := "[ ]"
-			if m.tagSelected[tag] {
+			if m.modal.tagSelected[tag] {
 				check = "[x]"
 			}
 			tagContent.WriteString(fmt.Sprintf("%s%s %s\n", cursor, check, tag))
 		}
-		if len(m.defaultTags) == 0 {
+		if len(m.modal.defaultTags) == 0 {
 			tagContent.WriteString(CurrentTheme.Dim.Render("  (no default tags)\n"))
 		}
 		tagContent.WriteString("\n" + CurrentTheme.Focused.Render("Custom") + "\n")
-		tagContent.WriteString(CurrentTheme.Focused.Render("> ") + m.tagInput.View())
+		tagContent.WriteString(CurrentTheme.Focused.Render("> ") + m.inputs.tagInput.View())
 
-		tagFrame := Frames.Modal.Copy().Padding(0, 1)
+		tagFrame := Frames.Modal.Padding(0, 1)
 		tagExtraWidth := lipgloss.Width(tagFrame.Render(""))
 		tagWidth := m.width - tagExtraWidth
 		if tagWidth < 1 {
@@ -362,14 +360,14 @@ func (m DashboardModel) renderJournalPane() string {
 				searchContent.WriteString(prefix + style.Render(line) + "\n")
 			}
 		}
-		journalFrame := Frames.Modal.Copy().Padding(0, 1)
+		journalFrame := Frames.Modal.Padding(0, 1)
 		journalExtraWidth := lipgloss.Width(journalFrame.Render(""))
 		journalWidth := m.width - journalExtraWidth
 		if journalWidth < 1 {
 			journalWidth = 1
 		}
 		journalPane = journalFrame.Width(journalWidth).Render(searchContent.String())
-	} else if len(m.journalEntries) > 0 || m.journaling {
+	} else if len(m.journalEntries) > 0 || m.modal.journaling {
 		var journalContent strings.Builder
 		journalContent.WriteString(CurrentTheme.Focused.Render("Journal") + "\n\n")
 		start := len(m.journalEntries) - 3
@@ -400,10 +398,10 @@ func (m DashboardModel) renderJournalPane() string {
 				entry.Content)
 			journalContent.WriteString(line + "\n")
 		}
-		if m.journaling {
-			journalContent.WriteString("\n" + CurrentTheme.Focused.Render("> ") + m.journalInput.View())
+		if m.modal.journaling {
+			journalContent.WriteString("\n" + CurrentTheme.Focused.Render("> ") + m.inputs.journalInput.View())
 		}
-		journalFrame := Frames.Modal.Copy().Padding(0, 1)
+		journalFrame := Frames.Modal.Padding(0, 1)
 		journalExtraWidth := lipgloss.Width(journalFrame.Render(""))
 		journalWidth := m.width - journalExtraWidth
 		if journalWidth < 1 {

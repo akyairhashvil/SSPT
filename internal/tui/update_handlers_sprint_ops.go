@@ -28,10 +28,10 @@ func (m DashboardModel) handleSprintPause(key string) (DashboardModel, tea.Cmd, 
 	if key != "s" {
 		return m, nil, false
 	}
-	if m.timer.BreakActive || !m.validSprintIndex(m.focusedColIdx) {
+	if m.timer.BreakActive || !m.validSprintIndex(m.view.focusedColIdx) {
 		return m, nil, true
 	}
-	target := m.sprints[m.focusedColIdx]
+	target := m.sprints[m.view.focusedColIdx]
 	if target.SprintNumber <= 0 {
 		return m, nil, true
 	}
@@ -55,10 +55,10 @@ func (m DashboardModel) handleSprintStart(key string) (DashboardModel, tea.Cmd, 
 	if key != "s" {
 		return m, nil, false
 	}
-	if m.timer.BreakActive || !m.validSprintIndex(m.focusedColIdx) {
+	if m.timer.BreakActive || !m.validSprintIndex(m.view.focusedColIdx) {
 		return m, nil, true
 	}
-	target := m.sprints[m.focusedColIdx]
+	target := m.sprints[m.view.focusedColIdx]
 	if target.SprintNumber <= 0 {
 		return m, nil, true
 	}

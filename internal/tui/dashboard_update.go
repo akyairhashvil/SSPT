@@ -25,14 +25,14 @@ func (m DashboardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleTick(msg)
 	}
 
-	if m.lock.Locked {
+	if m.security.lock.Locked {
 		return m.handleLockedState(msg)
 	}
 	if m.inInputMode() {
 		return m.handleModalState(msg)
 	}
 	if msg, ok := msg.(tea.KeyMsg); ok {
-		if m.movingGoal {
+		if m.modal.movingGoal {
 			return m.handleMoveMode(msg)
 		}
 		return m.handleNormalMode(msg)

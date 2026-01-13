@@ -13,12 +13,12 @@ import (
 func (m DashboardModel) handleWindowSize(msg tea.WindowSizeMsg) (DashboardModel, tea.Cmd) {
 	m.width, m.height = msg.Width, msg.Height
 	if m.width > 0 {
-		target := 30
-		if m.width < 60 {
+		target := config.TargetTitleWidth
+		if m.width < config.CompactModeThreshold {
 			target = m.width / 2
 		}
-		if target < 10 {
-			target = 10
+		if target < config.MinTitleWidth {
+			target = config.MinTitleWidth
 		}
 		m.progress.Width = target
 	}
@@ -26,11 +26,11 @@ func (m DashboardModel) handleWindowSize(msg tea.WindowSizeMsg) (DashboardModel,
 }
 
 func (m DashboardModel) handleTick(msg TickMsg) (DashboardModel, tea.Cmd) {
-	if !m.lock.Locked && m.lock.PassphraseHash != "" && time.Since(m.lock.LastInput) >= config.AutoLockAfter {
-		m.lock.Locked = true
-		m.lock.Message = "Session locked (idle)"
-		m.lock.PassphraseInput.Reset()
-		m.lock.PassphraseInput.Focus()
+	if !m.security.lock.Locked && m.security.lock.PassphraseHash != "" && time.Since(m.security.lock.LastInput) >= config.AutoLockAfter {
+		m.security.lock.Locked = true
+		m.security.lock.Message = "Session locked (idle)"
+		m.security.lock.PassphraseInput.Reset()
+		m.security.lock.PassphraseInput.Focus()
 		return m, nil
 	}
 	if m.timer.BreakActive {
@@ -144,17 +144,17 @@ func (m DashboardModel) handleNormalMode(msg tea.KeyMsg) (DashboardModel, tea.Cm
 	case "q", "ctrl+c":
 		return m, tea.Quit
 	case "L":
-		if m.lock.PassphraseHash == "" {
-			m.lock.Message = "Set passphrase to unlock"
+		if m.security.lock.PassphraseHash == "" {
+			m.security.lock.Message = "Set passphrase to unlock"
 		} else {
-			m.lock.Message = "Enter passphrase to unlock"
+			m.security.lock.Message = "Enter passphrase to unlock"
 		}
-		m.lock.Locked = true
-		m.lock.PassphraseInput.Reset()
-		m.lock.PassphraseInput.Focus()
+		m.security.lock.Locked = true
+		m.security.lock.PassphraseInput.Reset()
+		m.security.lock.PassphraseInput.Focus()
 		return m, nil
 	case "ctrl+e":
-		path, err := ExportVault(m.ctx, m.db, m.lock.PassphraseHash)
+		path, err := ExportVault(m.ctx, m.db, m.security.lock.PassphraseHash)
 		if err != nil {
 			m.Message = fmt.Sprintf("Export failed: %v", err)
 		} else {
@@ -163,7 +163,7 @@ func (m DashboardModel) handleNormalMode(msg tea.KeyMsg) (DashboardModel, tea.Cm
 		return m, nil
 	case "/":
 		m.search.Active = true
-		m.search.ArchiveOnly = m.focusedColIdx < len(m.sprints) && m.sprints[m.focusedColIdx].SprintNumber == -2
+		m.search.ArchiveOnly = m.view.focusedColIdx < len(m.sprints) && m.sprints[m.view.focusedColIdx].SprintNumber == -2
 		m.search.Cursor = 0
 		m.search.Input.Focus()
 		if m.search.ArchiveOnly && len(m.workspaces) > 0 {
@@ -173,25 +173,25 @@ func (m DashboardModel) handleNormalMode(msg tea.KeyMsg) (DashboardModel, tea.Cm
 		}
 		return m, nil
 	case "C":
-		m.confirmingClearDB = true
-		m.clearDBNeedsPass = m.lock.PassphraseHash != ""
-		m.clearDBStatus = ""
-		m.lock.PassphraseInput.Reset()
-		m.lock.PassphraseInput.Placeholder = "Passphrase"
-		m.lock.PassphraseInput.Focus()
+		m.security.confirmingClearDB = true
+		m.security.clearDBNeedsPass = m.security.lock.PassphraseHash != ""
+		m.security.clearDBStatus = ""
+		m.security.lock.PassphraseInput.Reset()
+		m.security.lock.PassphraseInput.Placeholder = "Passphrase"
+		m.security.lock.PassphraseInput.Focus()
 		return m, nil
 	case "p":
-		m.changingPassphrase = true
-		m.passphraseStatus = ""
-		m.passphraseStage = 0
-		m.passphraseCurrent.Reset()
-		m.passphraseNew.Reset()
-		m.passphraseConfirm.Reset()
-		if m.lock.PassphraseHash == "" {
-			m.passphraseStage = 1
-			m.passphraseNew.Focus()
+		m.security.changingPassphrase = true
+		m.security.passphraseStatus = ""
+		m.security.passphraseStage = 0
+		m.inputs.passphraseCurrent.Reset()
+		m.inputs.passphraseNew.Reset()
+		m.inputs.passphraseConfirm.Reset()
+		if m.security.lock.PassphraseHash == "" {
+			m.security.passphraseStage = 1
+			m.inputs.passphraseNew.Focus()
 		} else {
-			m.passphraseCurrent.Focus()
+			m.inputs.passphraseCurrent.Focus()
 		}
 		return m, nil
 	case "<":

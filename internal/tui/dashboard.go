@@ -38,75 +38,28 @@ const (
 
 // --- Model ---
 type DashboardModel struct {
-	db                   Database
-	ctx                  context.Context
-	day                  models.Day
-	sprints              []SprintView
-	workspaces           []models.Workspace
-	activeWorkspaceIdx   int
-	viewMode             int
-	focusedColIdx        int
-	focusedGoalIdx       int
-	colScrollOffset      int
-	goalScrollOffsets    map[int]int
-	creatingGoal         bool
-	editingGoal          bool
-	editingGoalID        int64
-	movingGoal           bool
-	creatingWorkspace    bool
-	initializingSprints  bool
-	pendingWorkspaceID   int64
-	tagging              bool
-	tagInput             textinput.Model
-	tagCursor            int
-	tagSelected          map[string]bool
-	defaultTags          []string
-	themeOrder           []string
-	themePicking         bool
-	themeCursor          int
-	themeNames           []string
-	depPicking           bool
-	depCursor            int
-	depOptions           []depOption
-	depSelected          map[int64]bool
-	settingRecurrence    bool
-	recurrenceOptions    []string
-	recurrenceCursor     int
-	recurrenceMode       string
-	weekdayOptions       []string
-	monthOptions         []string
-	recurrenceSelected   map[string]bool
-	recurrenceFocus      string
-	recurrenceItemCursor int
-	recurrenceDayCursor  int
-	monthDayOptions      []string
-	confirmingDelete     bool
-	confirmDeleteGoalID  int64
-	lock                 LockModel
-	changingPassphrase   bool
-	confirmingClearDB    bool
-	clearDBNeedsPass     bool
-	clearDBStatus        string
-	passphraseStage      int
-	passphraseStatus     string
-	passphraseCurrent    textinput.Model
-	passphraseNew        textinput.Model
-	passphraseConfirm    textinput.Model
-	journaling           bool
-	journalEntries       []models.JournalEntry
-	journalInput         textinput.Model
-	search               SearchModel
-	showAnalytics        bool
-	expandedState        map[int64]bool
-	goalTreeCache        map[string][]GoalView
-	progress             progress.Model
-	timer                TimerModel
-	textInput            textinput.Model
-	err                  error
-	statusMessage        string
-	statusIsError        bool
-	Message              string
-	width, height        int
+	db                 Database
+	ctx                context.Context
+	day                models.Day
+	sprints            []SprintView
+	workspaces         []models.Workspace
+	activeWorkspaceIdx int
+	viewMode           int
+	view               *ViewState
+	modal              *ModalState
+	inputs             *InputState
+	security           *SecurityState
+	journalEntries     []models.JournalEntry
+	search             SearchModel
+	showAnalytics      bool
+	goalTreeCache      map[string][]GoalView
+	progress           progress.Model
+	timer              TimerModel
+	err                error
+	statusMessage      string
+	statusIsError      bool
+	Message            string
+	width, height      int
 }
 
 type depOption struct {
@@ -119,67 +72,40 @@ func NewDashboardModel(ctx context.Context, db Database, dayID int64) DashboardM
 		ctx = context.Background()
 	}
 	_, wsErr := db.EnsureDefaultWorkspace(ctx)
-	ti := textinput.New()
-	ti.Placeholder = "New Objective..."
-	ti.CharLimit = 100
-	ti.Width = 40
-	ji := textinput.New()
-	ji.Placeholder = "Log thoughts..."
-	ji.Width = 50
+	inputs := newInputState()
 	si := textinput.New()
 	si.Placeholder = "Search..."
 	si.Width = 30
-	tagInput := textinput.New()
-	tagInput.Placeholder = "Add custom tags (space-separated)"
-	tagInput.Width = 50
 	passInput := textinput.New()
 	passInput.Placeholder = "Passphrase"
 	passInput.EchoMode = textinput.EchoPassword
 	passInput.Width = 30
-	passCurrent := textinput.New()
-	passCurrent.Placeholder = "Current passphrase"
-	passCurrent.EchoMode = textinput.EchoPassword
-	passCurrent.Width = 30
-	passNew := textinput.New()
-	passNew.Placeholder = "New passphrase"
-	passNew.EchoMode = textinput.EchoPassword
-	passNew.Width = 30
-	passConfirm := textinput.New()
-	passConfirm.Placeholder = "Confirm passphrase"
-	passConfirm.EchoMode = textinput.EchoPassword
-	passConfirm.Width = 30
 
 	lock := NewLockModel(config.AutoLockAfter, passInput)
 	search := NewSearchModel(si)
+	view := newViewState()
+	modal := newModalState()
+	security := newSecurityState(lock)
+	modal.defaultTags = []string{"urgent", "docs", "blocked", "waiting", "bug", "idea", "review", "focus", "later"}
+	modal.themeOrder = []string{"default", "dracula", "cyberpunk", "solar"}
+	modal.recurrenceOptions = []string{"none", "daily", "weekly", "monthly"}
+	modal.recurrenceMode = "none"
+	modal.weekdayOptions = []string{"mon", "tue", "wed", "thu", "fri", "sat", "sun"}
+	modal.monthOptions = []string{"jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"}
+	modal.monthDayOptions = buildMonthDays()
+	modal.recurrenceFocus = "mode"
 
 	m := DashboardModel{
 		db:                 db,
 		ctx:                ctx,
-		textInput:          ti,
-		journalInput:       ji,
-		tagInput:           tagInput,
-		lock:               lock,
+		view:               view,
+		modal:              modal,
+		inputs:             inputs,
+		security:           security,
 		search:             search,
 		timer:              NewTimerModel(),
 		progress:           progress.New(progress.WithDefaultGradient()),
 		activeWorkspaceIdx: 0,
-		focusedColIdx:      1,
-		goalScrollOffsets:  make(map[int]int),
-		expandedState:      make(map[int64]bool),
-		tagSelected:        make(map[string]bool),
-		defaultTags:        []string{"urgent", "docs", "blocked", "waiting", "bug", "idea", "review", "focus", "later"},
-		themeOrder:         []string{"default", "dracula", "cyberpunk", "solar"},
-		depSelected:        make(map[int64]bool),
-		recurrenceOptions:  []string{"none", "daily", "weekly", "monthly"},
-		recurrenceMode:     "none",
-		weekdayOptions:     []string{"mon", "tue", "wed", "thu", "fri", "sat", "sun"},
-		monthOptions:       []string{"jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"},
-		monthDayOptions:    buildMonthDays(),
-		recurrenceSelected: make(map[string]bool),
-		recurrenceFocus:    "mode",
-		passphraseCurrent:  passCurrent,
-		passphraseNew:      passNew,
-		passphraseConfirm:  passConfirm,
 	}
 	if wsErr != nil {
 		m.setStatusError(fmt.Sprintf("Error ensuring default workspace: %v", wsErr))
@@ -187,27 +113,27 @@ func NewDashboardModel(ctx context.Context, db Database, dayID int64) DashboardM
 		m.setStatusError(fmt.Sprintf("Error loading workspaces: %v", err))
 	}
 	if hash, ok := m.db.GetSetting(ctx, "passphrase_hash"); ok && hash != "" {
-		m.lock.PassphraseHash = hash
-		m.lock.Locked = true
-		m.lock.Message = "Enter passphrase to unlock"
+		m.security.lock.PassphraseHash = hash
+		m.security.lock.Locked = true
+		m.security.lock.Message = "Enter passphrase to unlock"
 	} else {
-		m.lock.Locked = true
-		m.lock.Message = "Set passphrase to unlock"
+		m.security.lock.Locked = true
+		m.security.lock.Message = "Set passphrase to unlock"
 	}
-	m.lock.PassphraseInput.Focus()
-	sort.Strings(m.defaultTags)
+	m.security.lock.PassphraseInput.Focus()
+	sort.Strings(m.modal.defaultTags)
 	for name := range Themes {
-		m.themeNames = append(m.themeNames, name)
+		m.modal.themeNames = append(m.modal.themeNames, name)
 	}
-	sort.Strings(m.themeNames)
-	m.progress.Width = 30
+	sort.Strings(m.modal.themeNames)
+	m.progress.Width = config.TargetTitleWidth
 	m.refreshData(dayID)
 
 	// Set initial focus
 	if len(m.sprints) > 1 {
 		for i := 1; i < len(m.sprints); i++ {
 			if m.sprints[i].Status != models.StatusCompleted && m.sprints[i].SprintNumber > 0 {
-				m.focusedColIdx = i
+				m.view.focusedColIdx = i
 				break
 			}
 		}
@@ -224,14 +150,14 @@ func (m DashboardModel) validSprintIndex(idx int) bool {
 }
 
 func (m DashboardModel) currentSprint() *SprintView {
-	if !m.validSprintIndex(m.focusedColIdx) {
+	if !m.validSprintIndex(m.view.focusedColIdx) {
 		return nil
 	}
-	return &m.sprints[m.focusedColIdx]
+	return &m.sprints[m.view.focusedColIdx]
 }
 
 func (m DashboardModel) canModifyGoals() bool {
-	return !m.lock.Locked && !m.inInputMode()
+	return !m.security.lock.Locked && !m.inInputMode()
 }
 
 func (m *DashboardModel) setStatusError(message string) {
@@ -245,27 +171,27 @@ func (m *DashboardModel) clearStatus() {
 }
 
 func (m *DashboardModel) passphraseRateLimited() (bool, time.Duration) {
-	if m.lock.LockUntil.IsZero() {
+	if m.security.lock.LockUntil.IsZero() {
 		return false, 0
 	}
-	if time.Now().Before(m.lock.LockUntil) {
-		return true, time.Until(m.lock.LockUntil)
+	if time.Now().Before(m.security.lock.LockUntil) {
+		return true, time.Until(m.security.lock.LockUntil)
 	}
-	m.lock.LockUntil = time.Time{}
+	m.security.lock.LockUntil = time.Time{}
 	return false, 0
 }
 
 func (m *DashboardModel) recordPassphraseFailure() {
-	m.lock.Attempts++
-	if m.lock.Attempts >= config.MaxPassphraseAttempts {
-		m.lock.Attempts = 0
-		m.lock.LockUntil = time.Now().Add(passphraseLockout)
+	m.security.lock.Attempts++
+	if m.security.lock.Attempts >= config.MaxPassphraseAttempts {
+		m.security.lock.Attempts = 0
+		m.security.lock.LockUntil = time.Now().Add(passphraseLockout)
 	}
 }
 
 func (m *DashboardModel) clearPassphraseFailures() {
-	m.lock.Attempts = 0
-	m.lock.LockUntil = time.Time{}
+	m.security.lock.Attempts = 0
+	m.security.lock.LockUntil = time.Time{}
 }
 
 func (m *DashboardModel) invalidateGoalCache() {
@@ -362,7 +288,7 @@ func (m *DashboardModel) refreshData(dayID int64) {
 			m.setStatusError(fmt.Sprintf("Error loading archived goals: %v", err))
 			return
 		}
-		flatArchived := Flatten(archivedGoals, 0, m.expandedState, 0)
+		flatArchived := Flatten(archivedGoals, 0, m.view.expandedState, 0)
 		fullList = append(fullList, SprintView{Sprint: models.Sprint{ID: -2, SprintNumber: -2}, Goals: flatArchived})
 	}
 
@@ -376,7 +302,7 @@ func (m *DashboardModel) refreshData(dayID int64) {
 			m.setStatusError(fmt.Sprintf("Error loading completed goals: %v", err))
 			return
 		}
-		flatCompleted := Flatten(completedGoals, 0, m.expandedState, 0)
+		flatCompleted := Flatten(completedGoals, 0, m.view.expandedState, 0)
 		fullList = append(fullList, SprintView{Sprint: models.Sprint{ID: -1, SprintNumber: -1}, Goals: flatCompleted})
 	}
 
@@ -428,7 +354,7 @@ func (m *DashboardModel) refreshData(dayID int64) {
 			return
 		}
 		backlogTree := applyBlocked(pruneCompleted(cloneGoals(backlogGoals)), 0)
-		flatBacklog := Flatten(backlogTree, 0, m.expandedState, 0)
+		flatBacklog := Flatten(backlogTree, 0, m.view.expandedState, 0)
 		fullList = append(fullList, SprintView{Sprint: models.Sprint{ID: 0, SprintNumber: 0}, Goals: flatBacklog})
 	}
 
@@ -443,7 +369,7 @@ func (m *DashboardModel) refreshData(dayID int64) {
 			return
 		}
 		sprintTree := applyBlocked(pruneCompleted(cloneGoals(goals)), 0)
-		sprintView := SprintView{Sprint: rawSprints[i], Goals: Flatten(sprintTree, 0, m.expandedState, 0)}
+		sprintView := SprintView{Sprint: rawSprints[i], Goals: Flatten(sprintTree, 0, m.view.expandedState, 0)}
 		fullList = append(fullList, sprintView)
 	}
 
@@ -518,8 +444,8 @@ func monthDayLimit(month string, year int) int {
 
 func (m *DashboardModel) selectedMonths() []string {
 	var out []string
-	for _, mo := range m.monthOptions {
-		if m.recurrenceSelected[mo] {
+	for _, mo := range m.modal.monthOptions {
+		if m.modal.recurrenceSelected[mo] {
 			out = append(out, mo)
 		}
 	}
@@ -543,20 +469,20 @@ func (m *DashboardModel) monthlyMaxDay() int {
 }
 
 func (m *DashboardModel) pruneMonthlyDays(maxDay int) {
-	for key := range m.recurrenceSelected {
+	for key := range m.modal.recurrenceSelected {
 		if strings.HasPrefix(key, "day:") {
 			val := strings.TrimPrefix(key, "day:")
 			if day, err := strconv.Atoi(val); err == nil && day > maxDay {
-				delete(m.recurrenceSelected, key)
+				delete(m.modal.recurrenceSelected, key)
 			}
 		}
 	}
 	if maxDay <= 0 {
-		m.recurrenceDayCursor = 0
+		m.modal.recurrenceDayCursor = 0
 		return
 	}
-	if m.recurrenceDayCursor > maxDay-1 {
-		m.recurrenceDayCursor = maxDay - 1
+	if m.modal.recurrenceDayCursor > maxDay-1 {
+		m.modal.recurrenceDayCursor = maxDay - 1
 	}
 }
 

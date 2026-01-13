@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 
+	"github.com/akyairhashvil/SSPT/internal/config"
 	tea "github.com/charmbracelet/bubbletea"
 )
 
@@ -13,7 +14,7 @@ func (m DashboardModel) handleWorkspaceSwitch(key string) (DashboardModel, tea.C
 	if len(m.workspaces) > 1 {
 		m.activeWorkspaceIdx = (m.activeWorkspaceIdx + 1) % len(m.workspaces)
 		m.refreshData(m.day.ID)
-		m.focusedColIdx = 1
+		m.view.focusedColIdx = config.DefaultFocusColumn
 	} else {
 		m.Message = "No other workspaces. Use Shift+W to create a new one."
 	}
@@ -24,8 +25,8 @@ func (m DashboardModel) handleWorkspaceCreate(key string) (DashboardModel, tea.C
 	if key != "W" {
 		return m, nil, false
 	}
-	m.creatingWorkspace = true
-	m.textInput.Focus()
+	m.modal.creatingWorkspace = true
+	m.inputs.textInput.Focus()
 	return m, nil, true
 }
 
@@ -80,12 +81,12 @@ func (m DashboardModel) handleWorkspaceViewMode(key string) (DashboardModel, tea
 		}
 		m.workspaces[m.activeWorkspaceIdx].ViewMode = m.viewMode
 	}
-	if m.viewMode == ViewModeFocused && m.sprints[m.focusedColIdx].SprintNumber == -1 {
-		m.focusedColIdx = 1
-	} else if m.viewMode == ViewModeMinimal && m.sprints[m.focusedColIdx].SprintNumber <= 0 {
-		m.focusedColIdx = 2
+	if m.viewMode == ViewModeFocused && m.sprints[m.view.focusedColIdx].SprintNumber == -1 {
+		m.view.focusedColIdx = config.DefaultFocusColumn
+	} else if m.viewMode == ViewModeMinimal && m.sprints[m.view.focusedColIdx].SprintNumber <= 0 {
+		m.view.focusedColIdx = 2
 		if len(m.sprints) <= 2 {
-			m.focusedColIdx = 0
+			m.view.focusedColIdx = 0
 		}
 	}
 	return m, nil, true
@@ -96,11 +97,11 @@ func (m DashboardModel) handleWorkspaceTheme(key string) (DashboardModel, tea.Cm
 		return m, nil, false
 	}
 	if len(m.workspaces) > 0 {
-		m.themePicking = true
+		m.modal.themePicking = true
 		activeWS := m.workspaces[m.activeWorkspaceIdx]
-		for i, t := range m.themeNames {
+		for i, t := range m.modal.themeNames {
 			if t == activeWS.Theme {
-				m.themeCursor = i
+				m.modal.themeCursor = i
 				break
 			}
 		}
@@ -163,8 +164,8 @@ func (m DashboardModel) handleWorkspaceSprintCount(key string) (DashboardModel, 
 			} else {
 				m.invalidateGoalCache()
 				m.refreshData(m.day.ID)
-				if m.focusedColIdx >= len(m.sprints) {
-					m.focusedColIdx = len(m.sprints) - 1
+				if m.view.focusedColIdx >= len(m.sprints) {
+					m.view.focusedColIdx = len(m.sprints) - 1
 				}
 			}
 		}

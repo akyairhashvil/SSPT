@@ -11,6 +11,26 @@ var (
 	ErrWrongPassphrase   = errors.New("incorrect passphrase")
 )
 
+const (
+	OpAdd     = "add"
+	OpUpdate  = "update"
+	OpDelete  = "delete"
+	OpGet     = "get"
+	OpList    = "list"
+	OpExists  = "exists"
+	OpMove    = "move"
+	OpReorder = "reorder"
+)
+
+const (
+	EntityGoal      = "goal"
+	EntitySprint    = "sprint"
+	EntityWorkspace = "workspace"
+	EntityTag       = "tag"
+	EntityJournal   = "journal"
+	EntitySetting   = "setting"
+)
+
 type OpError struct {
 	Op       string
 	Resource string
@@ -29,6 +49,16 @@ func (e *OpError) Error() string {
 }
 
 func (e *OpError) Unwrap() error { return e.Err }
+
+func wrapErr(entity, op string, id int64, err error) error {
+	if err == nil {
+		return nil
+	}
+	if id > 0 {
+		return fmt.Errorf("%s %s (id=%d): %w", op, entity, id, err)
+	}
+	return fmt.Errorf("%s %s: %w", op, entity, err)
+}
 
 func wrapGoalErr(op string, id int64, err error) error {
 	if err == nil {

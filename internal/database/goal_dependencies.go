@@ -103,7 +103,7 @@ func (d *Database) getGoalWorkspaceID(ctx context.Context, goalID int64) (int64,
 func getGoalWorkspaceIDTx(ctx context.Context, tx *sql.Tx, goalID int64) (int64, bool, error) {
 	var wsID *int64
 	if err := tx.QueryRowContext(ctx, "SELECT workspace_id FROM goals WHERE id = ?", goalID).Scan(&wsID); err != nil {
-		return 0, false, err
+		return 0, false, wrapGoalErr("workspace lookup", goalID, err)
 	}
 	if wsID == nil {
 		return 0, false, nil

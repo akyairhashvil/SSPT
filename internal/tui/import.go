@@ -24,6 +24,7 @@ type seedConfig struct {
 	} `json:"sprints"`
 }
 
+// EnsureSeedFile returns the seed file path, creating a default template if needed.
 func EnsureSeedFile() (string, error) {
 	configDir := util.ConfigDir("sspt")
 	jsonPath := filepath.Join(configDir, "seed.json")
@@ -61,6 +62,7 @@ func EnsureSeedFile() (string, error) {
 	return txtPath, nil
 }
 
+// ImportSeed loads a seed file (JSON or DSL) and inserts goals into the database.
 func ImportSeed(ctx context.Context, db Database, path string, workspaceID int64, dayID int64) (int, string, int, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {

@@ -13,7 +13,6 @@ type TestDataBuilder struct {
 	db           *Database
 	workspaceIDs []int64
 	sprintIDs    []int64
-	goalIDs      []int64
 }
 
 func NewTestDataBuilder(t *testing.T) *TestDataBuilder {

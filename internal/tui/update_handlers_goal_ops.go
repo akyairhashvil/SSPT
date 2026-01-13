@@ -13,16 +13,16 @@ import (
 func (m DashboardModel) handleGoalCreate(key string) (DashboardModel, tea.Cmd, bool) {
 	switch key {
 	case "n":
-		m.creatingGoal, m.editingGoalID = true, 0
-		m.textInput.Placeholder = "New Objective..."
-		m.textInput.Focus()
+		m.modal.creatingGoal, m.modal.editingGoalID = true, 0
+		m.inputs.textInput.Placeholder = "New Objective..."
+		m.inputs.textInput.Focus()
 		return m, nil, true
 	case "N":
-		if m.validSprintIndex(m.focusedColIdx) && m.focusedColIdx > 0 && len(m.sprints[m.focusedColIdx].Goals) > m.focusedGoalIdx {
-			parent := m.sprints[m.focusedColIdx].Goals[m.focusedGoalIdx]
-			m.creatingGoal, m.editingGoalID = true, parent.ID
-			m.textInput.Placeholder = "New Subtask..."
-			m.textInput.Focus()
+		if m.validSprintIndex(m.view.focusedColIdx) && m.view.focusedColIdx > 0 && len(m.sprints[m.view.focusedColIdx].Goals) > m.view.focusedGoalIdx {
+			parent := m.sprints[m.view.focusedColIdx].Goals[m.view.focusedGoalIdx]
+			m.modal.creatingGoal, m.modal.editingGoalID = true, parent.ID
+			m.inputs.textInput.Placeholder = "New Subtask..."
+			m.inputs.textInput.Focus()
 			return m, nil, true
 		}
 	}
@@ -33,11 +33,11 @@ func (m DashboardModel) handleGoalEdit(key string) (DashboardModel, tea.Cmd, boo
 	if key != "e" {
 		return m, nil, false
 	}
-	if m.validSprintIndex(m.focusedColIdx) && len(m.sprints[m.focusedColIdx].Goals) > m.focusedGoalIdx {
-		target := m.sprints[m.focusedColIdx].Goals[m.focusedGoalIdx]
-		m.editingGoal, m.editingGoalID = true, target.ID
-		m.textInput.SetValue(target.Description)
-		m.textInput.Focus()
+	if m.validSprintIndex(m.view.focusedColIdx) && len(m.sprints[m.view.focusedColIdx].Goals) > m.view.focusedGoalIdx {
+		target := m.sprints[m.view.focusedColIdx].Goals[m.view.focusedGoalIdx]
+		m.modal.editingGoal, m.modal.editingGoalID = true, target.ID
+		m.inputs.textInput.SetValue(target.Description)
+		m.inputs.textInput.Focus()
 		return m, nil, true
 	}
 	return m, nil, false
@@ -46,9 +46,9 @@ func (m DashboardModel) handleGoalEdit(key string) (DashboardModel, tea.Cmd, boo
 func (m DashboardModel) handleGoalDelete(key string) (DashboardModel, tea.Cmd, bool) {
 	switch key {
 	case "d", "backspace":
-		if m.validSprintIndex(m.focusedColIdx) && len(m.sprints[m.focusedColIdx].Goals) > m.focusedGoalIdx {
-			m.confirmingDelete = true
-			m.confirmDeleteGoalID = m.sprints[m.focusedColIdx].Goals[m.focusedGoalIdx].ID
+		if m.validSprintIndex(m.view.focusedColIdx) && len(m.sprints[m.view.focusedColIdx].Goals) > m.view.focusedGoalIdx {
+			m.modal.confirmingDelete = true
+			m.modal.confirmDeleteGoalID = m.sprints[m.view.focusedColIdx].Goals[m.view.focusedGoalIdx].ID
 		}
 		return m, nil, true
 	}
@@ -59,8 +59,8 @@ func (m DashboardModel) handleGoalMove(key string) (DashboardModel, tea.Cmd, boo
 	if key != "m" {
 		return m, nil, false
 	}
-	if m.validSprintIndex(m.focusedColIdx) && len(m.sprints[m.focusedColIdx].Goals) > m.focusedGoalIdx {
-		m.movingGoal = true
+	if m.validSprintIndex(m.view.focusedColIdx) && len(m.sprints[m.view.focusedColIdx].Goals) > m.view.focusedGoalIdx {
+		m.modal.movingGoal = true
 		return m, nil, true
 	}
 	return m, nil, false
@@ -70,14 +70,14 @@ func (m DashboardModel) handleMoveMode(msg tea.Msg) (DashboardModel, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		if msg.Type == tea.KeyEsc {
-			m.movingGoal = false
+			m.modal.movingGoal = false
 			return m, nil
 		}
 		if len(msg.String()) == 1 && strings.Contains("012345678", msg.String()) {
 			targetNum := int(msg.String()[0] - '0')
-			currentSprint := m.sprints[m.focusedColIdx]
-			if len(currentSprint.Goals) > m.focusedGoalIdx {
-				goal := currentSprint.Goals[m.focusedGoalIdx]
+			currentSprint := m.sprints[m.view.focusedColIdx]
+			if len(currentSprint.Goals) > m.view.focusedGoalIdx {
+				goal := currentSprint.Goals[m.view.focusedGoalIdx]
 				var targetID int64 = 0 // Default to Backlog
 				found := false
 				if targetNum == 0 {
@@ -97,13 +97,13 @@ func (m DashboardModel) handleMoveMode(msg tea.Msg) (DashboardModel, tea.Cmd) {
 					} else {
 						m.invalidateGoalCache()
 						m.refreshData(m.day.ID)
-						if m.focusedGoalIdx > 0 {
-							m.focusedGoalIdx--
+						if m.view.focusedGoalIdx > 0 {
+							m.view.focusedGoalIdx--
 						}
 					}
 				}
 			}
-			m.movingGoal = false
+			m.modal.movingGoal = false
 			return m, nil
 		}
 	}
@@ -114,9 +114,9 @@ func (m DashboardModel) handleGoalExpandCollapse(key string) (DashboardModel, te
 	if key != "z" {
 		return m, nil, false
 	}
-	if m.validSprintIndex(m.focusedColIdx) && len(m.sprints[m.focusedColIdx].Goals) > m.focusedGoalIdx {
-		target := m.sprints[m.focusedColIdx].Goals[m.focusedGoalIdx]
-		m.expandedState[target.ID] = !m.expandedState[target.ID]
+	if m.validSprintIndex(m.view.focusedColIdx) && len(m.sprints[m.view.focusedColIdx].Goals) > m.view.focusedGoalIdx {
+		target := m.sprints[m.view.focusedColIdx].Goals[m.view.focusedGoalIdx]
+		m.view.expandedState[target.ID] = !m.view.expandedState[target.ID]
 		m.refreshData(m.day.ID)
 	}
 	return m, nil, true
@@ -126,8 +126,8 @@ func (m DashboardModel) handleGoalTaskTimer(key string) (DashboardModel, tea.Cmd
 	if key != "T" {
 		return m, nil, false
 	}
-	if m.validSprintIndex(m.focusedColIdx) && len(m.sprints[m.focusedColIdx].Goals) > m.focusedGoalIdx {
-		target := m.sprints[m.focusedColIdx].Goals[m.focusedGoalIdx]
+	if m.validSprintIndex(m.view.focusedColIdx) && len(m.sprints[m.view.focusedColIdx].Goals) > m.view.focusedGoalIdx {
+		target := m.sprints[m.view.focusedColIdx].Goals[m.view.focusedGoalIdx]
 		if target.TaskActive {
 			if err := m.db.PauseTaskTimer(m.ctx, target.ID); err != nil {
 				m.setStatusError(fmt.Sprintf("Error pausing task timer: %v", err))
@@ -151,8 +151,8 @@ func (m DashboardModel) handleGoalPriority(key string) (DashboardModel, tea.Cmd,
 	if key != "P" {
 		return m, nil, false
 	}
-	if m.validSprintIndex(m.focusedColIdx) && len(m.sprints[m.focusedColIdx].Goals) > m.focusedGoalIdx {
-		target := m.sprints[m.focusedColIdx].Goals[m.focusedGoalIdx]
+	if m.validSprintIndex(m.view.focusedColIdx) && len(m.sprints[m.view.focusedColIdx].Goals) > m.view.focusedGoalIdx {
+		target := m.sprints[m.view.focusedColIdx].Goals[m.view.focusedGoalIdx]
 		next := target.Priority + 1
 		if next < 1 || next > 5 {
 			next = 1
@@ -170,16 +170,16 @@ func (m DashboardModel) handleGoalPriority(key string) (DashboardModel, tea.Cmd,
 func (m DashboardModel) handleGoalJournalStart(key string) (DashboardModel, tea.Cmd, bool) {
 	switch key {
 	case "ctrl+j":
-		m.journaling, m.editingGoalID = true, 0
-		m.journalInput.Placeholder = "Log your thoughts..."
-		m.journalInput.Focus()
+		m.modal.journaling, m.modal.editingGoalID = true, 0
+		m.inputs.journalInput.Placeholder = "Log your thoughts..."
+		m.inputs.journalInput.Focus()
 		return m, nil, true
 	case "J":
-		if m.validSprintIndex(m.focusedColIdx) && len(m.sprints[m.focusedColIdx].Goals) > m.focusedGoalIdx {
-			target := m.sprints[m.focusedColIdx].Goals[m.focusedGoalIdx]
-			m.journaling, m.editingGoalID = true, target.ID
-			m.journalInput.Placeholder = fmt.Sprintf("Log for: %s", target.Description)
-			m.journalInput.Focus()
+		if m.validSprintIndex(m.view.focusedColIdx) && len(m.sprints[m.view.focusedColIdx].Goals) > m.view.focusedGoalIdx {
+			target := m.sprints[m.view.focusedColIdx].Goals[m.view.focusedGoalIdx]
+			m.modal.journaling, m.modal.editingGoalID = true, target.ID
+			m.inputs.journalInput.Placeholder = fmt.Sprintf("Log for: %s", target.Description)
+			m.inputs.journalInput.Focus()
 			return m, nil, true
 		}
 	}
@@ -189,32 +189,32 @@ func (m DashboardModel) handleGoalJournalStart(key string) (DashboardModel, tea.
 func (m DashboardModel) handleGoalArchive(key string) (DashboardModel, tea.Cmd, bool) {
 	switch key {
 	case "A":
-		if m.validSprintIndex(m.focusedColIdx) && len(m.sprints[m.focusedColIdx].Goals) > m.focusedGoalIdx {
-			sprint := m.sprints[m.focusedColIdx]
+		if m.validSprintIndex(m.view.focusedColIdx) && len(m.sprints[m.view.focusedColIdx].Goals) > m.view.focusedGoalIdx {
+			sprint := m.sprints[m.view.focusedColIdx]
 			if sprint.SprintNumber != -2 {
-				if err := m.db.ArchiveGoal(m.ctx, sprint.Goals[m.focusedGoalIdx].ID); err != nil {
+				if err := m.db.ArchiveGoal(m.ctx, sprint.Goals[m.view.focusedGoalIdx].ID); err != nil {
 					m.setStatusError(fmt.Sprintf("Error archiving goal: %v", err))
 				} else {
 					m.invalidateGoalCache()
 					m.refreshData(m.day.ID)
-					if m.focusedGoalIdx > 0 {
-						m.focusedGoalIdx--
+					if m.view.focusedGoalIdx > 0 {
+						m.view.focusedGoalIdx--
 					}
 				}
 			}
 		}
 		return m, nil, true
 	case "u":
-		if m.validSprintIndex(m.focusedColIdx) && len(m.sprints[m.focusedColIdx].Goals) > m.focusedGoalIdx {
-			sprint := m.sprints[m.focusedColIdx]
+		if m.validSprintIndex(m.view.focusedColIdx) && len(m.sprints[m.view.focusedColIdx].Goals) > m.view.focusedGoalIdx {
+			sprint := m.sprints[m.view.focusedColIdx]
 			if sprint.SprintNumber == -2 {
-				if err := m.db.UnarchiveGoal(m.ctx, sprint.Goals[m.focusedGoalIdx].ID); err != nil {
+				if err := m.db.UnarchiveGoal(m.ctx, sprint.Goals[m.view.focusedGoalIdx].ID); err != nil {
 					m.setStatusError(fmt.Sprintf("Error unarchiving goal: %v", err))
 				} else {
 					m.invalidateGoalCache()
 					m.refreshData(m.day.ID)
-					if m.focusedGoalIdx > 0 {
-						m.focusedGoalIdx--
+					if m.view.focusedGoalIdx > 0 {
+						m.view.focusedGoalIdx--
 					}
 				}
 			}
@@ -228,18 +228,18 @@ func (m DashboardModel) handleGoalDependencyPicker(key string) (DashboardModel, 
 	if key != "D" {
 		return m, nil, false
 	}
-	if m.validSprintIndex(m.focusedColIdx) && len(m.sprints[m.focusedColIdx].Goals) > m.focusedGoalIdx {
-		target := m.sprints[m.focusedColIdx].Goals[m.focusedGoalIdx]
-		m.depPicking, m.editingGoalID = true, target.ID
-		m.depOptions = m.buildDepOptions(target.ID)
+	if m.validSprintIndex(m.view.focusedColIdx) && len(m.sprints[m.view.focusedColIdx].Goals) > m.view.focusedGoalIdx {
+		target := m.sprints[m.view.focusedColIdx].Goals[m.view.focusedGoalIdx]
+		m.modal.depPicking, m.modal.editingGoalID = true, target.ID
+		m.modal.depOptions = m.buildDepOptions(target.ID)
 		deps, err := m.db.GetGoalDependencies(m.ctx, target.ID)
 		if err != nil {
 			m.setStatusError(fmt.Sprintf("Error loading dependencies: %v", err))
-			m.depSelected = make(map[int64]bool)
+			m.modal.depSelected = make(map[int64]bool)
 		} else {
-			m.depSelected = deps
+			m.modal.depSelected = deps
 		}
-		m.depCursor = 0
+		m.modal.depCursor = 0
 		return m, nil, true
 	}
 	return m, nil, false
@@ -249,37 +249,37 @@ func (m DashboardModel) handleGoalRecurrencePicker(key string) (DashboardModel, 
 	if key != "R" {
 		return m, nil, false
 	}
-	if m.validSprintIndex(m.focusedColIdx) && len(m.sprints[m.focusedColIdx].Goals) > m.focusedGoalIdx {
-		target := m.sprints[m.focusedColIdx].Goals[m.focusedGoalIdx]
-		m.settingRecurrence, m.editingGoalID = true, target.ID
-		m.recurrenceCursor = 0
-		m.recurrenceMode = "none"
-		m.recurrenceSelected = make(map[string]bool)
-		m.recurrenceFocus = "mode"
-		m.recurrenceItemCursor = 0
-		m.recurrenceDayCursor = 0
+	if m.validSprintIndex(m.view.focusedColIdx) && len(m.sprints[m.view.focusedColIdx].Goals) > m.view.focusedGoalIdx {
+		target := m.sprints[m.view.focusedColIdx].Goals[m.view.focusedGoalIdx]
+		m.modal.settingRecurrence, m.modal.editingGoalID = true, target.ID
+		m.modal.recurrenceCursor = 0
+		m.modal.recurrenceMode = "none"
+		m.modal.recurrenceSelected = make(map[string]bool)
+		m.modal.recurrenceFocus = "mode"
+		m.modal.recurrenceItemCursor = 0
+		m.modal.recurrenceDayCursor = 0
 		if target.RecurrenceRule != nil {
 			rule := strings.ToLower(strings.TrimSpace(*target.RecurrenceRule))
 			switch {
 			case rule == "daily":
-				m.recurrenceMode = "daily"
+				m.modal.recurrenceMode = "daily"
 			case strings.HasPrefix(rule, "weekly:"):
-				m.recurrenceMode = "weekly"
+				m.modal.recurrenceMode = "weekly"
 				parts := strings.Split(strings.TrimPrefix(rule, "weekly:"), ",")
 				for _, p := range parts {
 					p = strings.TrimSpace(p)
 					if p != "" {
-						m.recurrenceSelected[p] = true
+						m.modal.recurrenceSelected[p] = true
 					}
 				}
-				for i, d := range m.weekdayOptions {
-					if m.recurrenceSelected[d] {
-						m.recurrenceItemCursor = i
+				for i, d := range m.modal.weekdayOptions {
+					if m.modal.recurrenceSelected[d] {
+						m.modal.recurrenceItemCursor = i
 						break
 					}
 				}
 			case strings.HasPrefix(rule, "monthly:"):
-				m.recurrenceMode = "monthly"
+				m.modal.recurrenceMode = "monthly"
 				payload := strings.TrimPrefix(rule, "monthly:")
 				var months []string
 				var days []string
@@ -300,7 +300,7 @@ func (m DashboardModel) handleGoalRecurrencePicker(key string) (DashboardModel, 
 				for _, mo := range months {
 					mo = strings.TrimSpace(mo)
 					if mo != "" {
-						m.recurrenceSelected[mo] = true
+						m.modal.recurrenceSelected[mo] = true
 					}
 				}
 				if len(days) == 0 {
@@ -309,26 +309,26 @@ func (m DashboardModel) handleGoalRecurrencePicker(key string) (DashboardModel, 
 				for _, d := range days {
 					d = strings.TrimSpace(d)
 					if d != "" {
-						m.recurrenceSelected["day:"+d] = true
+						m.modal.recurrenceSelected["day:"+d] = true
 					}
 				}
-				for i, mo := range m.monthOptions {
-					if m.recurrenceSelected[mo] {
-						m.recurrenceItemCursor = i
+				for i, mo := range m.modal.monthOptions {
+					if m.modal.recurrenceSelected[mo] {
+						m.modal.recurrenceItemCursor = i
 						break
 					}
 				}
-				for i, d := range m.monthDayOptions {
-					if m.recurrenceSelected["day:"+d] {
-						m.recurrenceDayCursor = i
+				for i, d := range m.modal.monthDayOptions {
+					if m.modal.recurrenceSelected["day:"+d] {
+						m.modal.recurrenceDayCursor = i
 						break
 					}
 				}
 			}
 		}
-		for i, opt := range m.recurrenceOptions {
-			if opt == m.recurrenceMode {
-				m.recurrenceCursor = i
+		for i, opt := range m.modal.recurrenceOptions {
+			if opt == m.modal.recurrenceMode {
+				m.modal.recurrenceCursor = i
 				break
 			}
 		}
@@ -341,17 +341,17 @@ func (m DashboardModel) handleGoalTagging(key string) (DashboardModel, tea.Cmd, 
 	if key != "t" {
 		return m, nil, false
 	}
-	if m.validSprintIndex(m.focusedColIdx) && m.focusedColIdx > 0 && len(m.sprints[m.focusedColIdx].Goals) > m.focusedGoalIdx {
-		target := m.sprints[m.focusedColIdx].Goals[m.focusedGoalIdx]
-		m.tagging, m.editingGoalID = true, target.ID
-		m.tagInput.Focus()
-		m.tagInput.SetValue("")
-		m.tagSelected = make(map[string]bool)
+	if m.validSprintIndex(m.view.focusedColIdx) && m.view.focusedColIdx > 0 && len(m.sprints[m.view.focusedColIdx].Goals) > m.view.focusedGoalIdx {
+		target := m.sprints[m.view.focusedColIdx].Goals[m.view.focusedGoalIdx]
+		m.modal.tagging, m.modal.editingGoalID = true, target.ID
+		m.inputs.tagInput.Focus()
+		m.inputs.tagInput.SetValue("")
+		m.modal.tagSelected = make(map[string]bool)
 		var customTags []string
 		if target.Tags != nil {
 			for _, t := range util.JSONToTags(*target.Tags) {
-				if containsTag(m.defaultTags, t) {
-					m.tagSelected[t] = true
+				if containsTag(m.modal.defaultTags, t) {
+					m.modal.tagSelected[t] = true
 				} else {
 					customTags = append(customTags, t)
 				}
@@ -359,9 +359,9 @@ func (m DashboardModel) handleGoalTagging(key string) (DashboardModel, tea.Cmd, 
 		}
 		if len(customTags) > 0 {
 			sort.Strings(customTags)
-			m.tagInput.SetValue(strings.Join(customTags, " "))
+			m.inputs.tagInput.SetValue(strings.Join(customTags, " "))
 		}
-		m.tagCursor = 0
+		m.modal.tagCursor = 0
 		return m, nil, true
 	}
 	return m, nil, false
@@ -371,8 +371,8 @@ func (m DashboardModel) handleGoalStatusToggle(key string) (DashboardModel, tea.
 	if key != " " {
 		return m, nil, false
 	}
-	if m.validSprintIndex(m.focusedColIdx) && len(m.sprints[m.focusedColIdx].Goals) > m.focusedGoalIdx {
-		goal := m.sprints[m.focusedColIdx].Goals[m.focusedGoalIdx]
+	if m.validSprintIndex(m.view.focusedColIdx) && len(m.sprints[m.view.focusedColIdx].Goals) > m.view.focusedGoalIdx {
+		goal := m.sprints[m.view.focusedColIdx].Goals[m.view.focusedGoalIdx]
 		blocked, err := m.db.IsGoalBlocked(m.ctx, goal.ID)
 		if err != nil {
 			m.setStatusError(fmt.Sprintf("Error checking dependencies: %v", err))

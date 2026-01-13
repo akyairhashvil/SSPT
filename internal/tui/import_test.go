@@ -1,63 +1,90 @@
 package tui
 
 import (
-	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
-
-	"github.com/akyairhashvil/SSPT/internal/database"
 )
 
-func TestImportSeedJSON(t *testing.T) {
-	ctx := context.Background()
-	dir := t.TempDir()
-	dbPath := filepath.Join(dir, "test.db")
-	db, err := database.Open(ctx, dbPath, "")
-	if err != nil {
-		t.Fatalf("Open failed: %v", err)
+func TestIsJSONSeed(t *testing.T) {
+	if !isJSONSeed([]byte("  \n\t{ \"a\": 1 }")) {
+		t.Fatalf("expected JSON seed detection")
 	}
-	t.Cleanup(func() {
-		if err := db.Close(); err != nil {
-			t.Logf("db close failed: %v", err)
-		}
-	})
+	if isJSONSeed([]byte(" # not json")) {
+		t.Fatalf("expected non-JSON seed detection")
+	}
+}
 
-	wsID, err := db.EnsureDefaultWorkspace(ctx)
+func TestParseSeedTask(t *testing.T) {
+	seed, err := parseSeedTask("Write docs #Docs #tag !3 @l ~weekly:mon,tue")
 	if err != nil {
-		t.Fatalf("EnsureDefaultWorkspace failed: %v", err)
+		t.Fatalf("parseSeedTask failed: %v", err)
 	}
-	if err := db.BootstrapDay(ctx, wsID, 1); err != nil {
-		t.Fatalf("BootstrapDay failed: %v", err)
+	if seed.Description != "Write docs" {
+		t.Fatalf("expected description %q, got %q", "Write docs", seed.Description)
 	}
-	dayID := db.CheckCurrentDay(ctx)
-	if dayID == 0 {
-		t.Fatalf("CheckCurrentDay returned zero ID")
+	if len(seed.Tags) != 2 || seed.Tags[0] != "docs" || seed.Tags[1] != "tag" {
+		t.Fatalf("unexpected tags: %#v", seed.Tags)
 	}
-
-	seed := `{
-  "backlog": [
-    {"description": "Backlog Task"}
-  ],
-  "sprints": [
-    {"number": 1, "tasks": [
-      {"description": "Sprint Task"}
-    ]}
-  ]
-}`
-	seedPath := filepath.Join(dir, "seed.json")
-	if err := os.WriteFile(seedPath, []byte(seed), 0o600); err != nil {
-		t.Fatalf("WriteFile failed: %v", err)
+	if seed.Priority != 3 {
+		t.Fatalf("expected priority 3, got %d", seed.Priority)
+	}
+	if seed.Effort != "L" {
+		t.Fatalf("expected effort L, got %q", seed.Effort)
+	}
+	if seed.Recurrence != "weekly:mon,tue" {
+		t.Fatalf("expected recurrence weekly:mon,tue, got %q", seed.Recurrence)
 	}
 
-	count, _, backlogFallback, err := ImportSeed(ctx, db, seedPath, wsID, dayID)
+	empty, err := parseSeedTask("  ")
 	if err != nil {
-		t.Fatalf("ImportSeed failed: %v", err)
+		t.Fatalf("parseSeedTask empty failed: %v", err)
 	}
-	if count != 2 {
-		t.Fatalf("expected 2 imported tasks, got %d", count)
+	if empty.Description != "" || len(empty.Tags) != 0 {
+		t.Fatalf("expected empty seed, got %#v", empty)
 	}
-	if backlogFallback != 0 {
-		t.Fatalf("expected no backlog fallback, got %d", backlogFallback)
+}
+
+func TestParseSprintNumber(t *testing.T) {
+	if num, ok := parseSprintNumber("+ 2"); !ok || num != 2 {
+		t.Fatalf("expected sprint number 2, got %d (ok=%v)", num, ok)
+	}
+	if num, ok := parseSprintNumber("+ sprint 3"); !ok || num != 3 {
+		t.Fatalf("expected sprint number 3, got %d (ok=%v)", num, ok)
+	}
+	if _, ok := parseSprintNumber("+ sprint"); ok {
+		t.Fatalf("expected invalid sprint line to return ok=false")
+	}
+}
+
+func TestSlugify(t *testing.T) {
+	if got := slugify("My Workspace_Name"); got != "my-workspace-name" {
+		t.Fatalf("expected slug %q, got %q", "my-workspace-name", got)
+	}
+}
+
+func TestIsMaxSprintErr(t *testing.T) {
+	if isMaxSprintErr(nil) {
+		t.Fatalf("expected nil error to be false")
+	}
+	if !isMaxSprintErr(errors.New("Max Sprints reached")) {
+		t.Fatalf("expected max sprints error to be true")
+	}
+}
+
+func TestEnsureSeedFileCreates(t *testing.T) {
+	temp := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", temp)
+
+	path, err := EnsureSeedFile()
+	if err != nil {
+		t.Fatalf("EnsureSeedFile failed: %v", err)
+	}
+	if filepath.Ext(path) != ".txt" && filepath.Ext(path) != ".json" {
+		t.Fatalf("unexpected seed file extension: %s", filepath.Ext(path))
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("seed file not created: %v", err)
 	}
 }

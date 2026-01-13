@@ -19,100 +19,60 @@ func (m DashboardModel) handleLockedState(msg tea.Msg) (DashboardModel, tea.Cmd)
 			return m, nil
 		}
 		if msg.Type == tea.KeyEnter {
-			entered := strings.TrimSpace(m.lock.PassphraseInput.Value())
+			entered := strings.TrimSpace(m.security.lock.PassphraseInput.Value())
 			if limited, wait := m.passphraseRateLimited(); limited {
 				remaining := wait.Round(time.Second)
 				if remaining < time.Second {
 					remaining = time.Second
 				}
-				m.lock.Message = fmt.Sprintf("Too many attempts. Try again in %s", remaining)
-				m.lock.PassphraseInput.Reset()
-				m.lock.PassphraseInput.Focus()
+				m.security.lock.Message = fmt.Sprintf("Too many attempts. Try again in %s", remaining)
+				m.security.lock.PassphraseInput.Reset()
+				m.security.lock.PassphraseInput.Focus()
 				return m, nil
 			}
-			if m.lock.PassphraseHash == "" {
-				if entered == "" {
-					m.lock.Message = "Passphrase required"
-					m.lock.PassphraseInput.Reset()
-					m.lock.PassphraseInput.Focus()
-					return m, nil
+			auth := newAuthHandler(m.db, m.ctx)
+			result := auth.ValidatePassphrase(entered, m.security.lock.PassphraseHash)
+			if result.Error != nil {
+				m.setStatusError(result.Error.Error())
+				return m, nil
+			}
+			if !result.Success {
+				m.recordPassphraseFailure()
+				if result.Message != "" {
+					m.security.lock.Message = result.Message
+				} else {
+					m.security.lock.Message = "Incorrect passphrase"
 				}
-				if err := util.ValidatePassphrase(entered); err != nil {
-					m.lock.Message = err.Error()
-					m.lock.PassphraseInput.Reset()
-					m.lock.PassphraseInput.Focus()
-					entered = ""
-					return m, nil
-				}
-				encInfo := m.db.EncryptionStatus()
-				encrypted := encInfo.DatabaseEncrypted
-				encryptErr := error(nil)
-				if !encrypted {
-					if err := m.db.EncryptDatabase(m.ctx, entered); err != nil && err != database.ErrSQLCipherUnavailable {
-						encryptErr = err
-						if !m.db.DatabaseHasData(m.ctx) {
-							if recErr := m.db.RecreateEncryptedDatabase(m.ctx, entered); recErr != nil {
-								m.lock.Message = fmt.Sprintf("Failed to encrypt database: %v", recErr)
-								m.lock.PassphraseInput.Reset()
-								m.lock.PassphraseInput.Focus()
-								entered = ""
-								return m, nil
-							}
-						} else {
-							m.lock.Message = fmt.Sprintf("Failed to encrypt database: %v", err)
-							m.lock.PassphraseInput.Reset()
-							m.lock.PassphraseInput.Focus()
-							entered = ""
-							return m, nil
-						}
-					} else if err == database.ErrSQLCipherUnavailable {
-						encryptErr = err
-						m.lock.Message = "SQLCipher unavailable; UI-only lock"
-					}
-				}
-				m.lock.PassphraseHash = util.HashPassphrase(entered)
-				if err := m.db.SetSetting(m.ctx, "passphrase_hash", m.lock.PassphraseHash); err != nil {
-					m.setStatusError(fmt.Sprintf("Error saving passphrase: %v", err))
-				}
-				if encryptErr == database.ErrSQLCipherUnavailable {
-					m.setStatusError("Encryption unavailable in this build; passphrase only locks the UI")
-				} else if !m.db.EncryptionStatus().DatabaseEncrypted {
-					m.setStatusError("Passphrase set but database remains unencrypted")
-				}
-				m.lock.Locked = false
-				m.lock.Message = ""
-				m.lock.PassphraseInput.Reset()
-				m.clearPassphraseFailures()
-				m.lock.LastInput = time.Now()
-				entered = ""
-				if m.day.ID > 0 {
-					m.refreshData(m.day.ID)
+				m.security.lock.PassphraseInput.Reset()
+				m.security.lock.PassphraseInput.Focus()
+				if !result.ShouldRetry {
+					return m, tea.Quit
 				}
 				return m, nil
 			}
-			if entered != "" && util.HashPassphrase(entered) == m.lock.PassphraseHash {
-				m.lock.Locked = false
-				m.lock.Message = ""
-				m.lock.PassphraseInput.Reset()
-				m.clearPassphraseFailures()
-				m.lock.LastInput = time.Now()
-				entered = ""
-				return m, nil
+			if result.PassphraseHash != "" {
+				m.security.lock.PassphraseHash = result.PassphraseHash
 			}
-			m.recordPassphraseFailure()
-			m.lock.Message = "Incorrect passphrase"
-			m.lock.PassphraseInput.Reset()
-			m.lock.PassphraseInput.Focus()
-			entered = ""
+			if result.StatusError != "" {
+				m.setStatusError(result.StatusError)
+			}
+			m.security.lock.Locked = false
+			m.security.lock.Message = ""
+			m.security.lock.PassphraseInput.Reset()
+			m.clearPassphraseFailures()
+			m.security.lock.LastInput = time.Now()
+			if m.day.ID > 0 {
+				m.refreshData(m.day.ID)
+			}
 			return m, nil
 		}
 	}
-	m.lock.PassphraseInput, cmd = m.lock.PassphraseInput.Update(msg)
+	m.security.lock.PassphraseInput, cmd = m.security.lock.PassphraseInput.Update(msg)
 	return m, cmd
 }
 
 func (m DashboardModel) inInputMode() bool {
-	return m.changingPassphrase || m.confirmingDelete || m.confirmingClearDB || m.creatingGoal || m.editingGoal || m.journaling || m.search.Active || m.creatingWorkspace || m.initializingSprints || m.tagging || m.themePicking || m.depPicking || m.settingRecurrence
+	return m.security.changingPassphrase || m.modal.confirmingDelete || m.security.confirmingClearDB || m.modal.creatingGoal || m.modal.editingGoal || m.modal.journaling || m.search.Active || m.modal.creatingWorkspace || m.modal.initializingSprints || m.modal.tagging || m.modal.themePicking || m.modal.depPicking || m.modal.settingRecurrence
 }
 
 func (m DashboardModel) handleModalState(msg tea.Msg) (DashboardModel, tea.Cmd) {
@@ -131,25 +91,25 @@ func (m DashboardModel) handleModalCancel(msg tea.KeyMsg) (DashboardModel, tea.C
 	if msg.Type != tea.KeyEsc {
 		return m, nil, false
 	}
-	m.confirmingDelete = false
-	m.confirmDeleteGoalID = 0
-	m.confirmingClearDB = false
-	m.clearDBNeedsPass = false
-	m.clearDBStatus = ""
-	m.lock.PassphraseInput.Reset()
-	m.changingPassphrase = false
-	m.passphraseStage = 0
-	m.passphraseStatus = ""
-	m.passphraseCurrent.Reset()
-	m.passphraseNew.Reset()
-	m.passphraseConfirm.Reset()
-	m.creatingGoal, m.editingGoal, m.journaling, m.search.Active, m.creatingWorkspace, m.initializingSprints, m.tagging, m.themePicking, m.depPicking, m.settingRecurrence = false, false, false, false, false, false, false, false, false, false
-	m.textInput.Reset()
-	m.journalInput.Reset()
+	m.modal.confirmingDelete = false
+	m.modal.confirmDeleteGoalID = 0
+	m.security.confirmingClearDB = false
+	m.security.clearDBNeedsPass = false
+	m.security.clearDBStatus = ""
+	m.security.lock.PassphraseInput.Reset()
+	m.security.changingPassphrase = false
+	m.security.passphraseStage = 0
+	m.security.passphraseStatus = ""
+	m.inputs.passphraseCurrent.Reset()
+	m.inputs.passphraseNew.Reset()
+	m.inputs.passphraseConfirm.Reset()
+	m.modal.creatingGoal, m.modal.editingGoal, m.modal.journaling, m.search.Active, m.modal.creatingWorkspace, m.modal.initializingSprints, m.modal.tagging, m.modal.themePicking, m.modal.depPicking, m.modal.settingRecurrence = false, false, false, false, false, false, false, false, false, false
+	m.inputs.textInput.Reset()
+	m.inputs.journalInput.Reset()
 	m.search.Input.Reset()
 	m.search.Cursor = 0
 	m.search.ArchiveOnly = false
-	m.tagInput.Reset()
+	m.inputs.tagInput.Reset()
 	return m, nil, true
 }
 
@@ -157,48 +117,46 @@ func (m DashboardModel) handleModalConfirm(msg tea.KeyMsg) (DashboardModel, tea.
 	if msg.Type != tea.KeyEnter {
 		return m, nil, false
 	}
-	if m.confirmingDelete {
-		if m.confirmDeleteGoalID > 0 {
-			if err := m.db.DeleteGoal(m.ctx, m.confirmDeleteGoalID); err != nil {
+	if m.modal.confirmingDelete {
+		if m.modal.confirmDeleteGoalID > 0 {
+			if err := m.db.DeleteGoal(m.ctx, m.modal.confirmDeleteGoalID); err != nil {
 				m.setStatusError(fmt.Sprintf("Error deleting goal: %v", err))
 			} else {
 				m.invalidateGoalCache()
 				m.refreshData(m.day.ID)
 			}
 		}
-		m.confirmingDelete = false
-		m.confirmDeleteGoalID = 0
+		m.modal.confirmingDelete = false
+		m.modal.confirmDeleteGoalID = 0
 		return m, nil, true
 	}
-	if m.confirmingClearDB {
-		if m.clearDBNeedsPass {
-			entered := strings.TrimSpace(m.lock.PassphraseInput.Value())
+	if m.security.confirmingClearDB {
+		if m.security.clearDBNeedsPass {
+			entered := strings.TrimSpace(m.security.lock.PassphraseInput.Value())
 			if limited, wait := m.passphraseRateLimited(); limited {
 				remaining := wait.Round(time.Second)
 				if remaining < time.Second {
 					remaining = time.Second
 				}
-				m.clearDBStatus = fmt.Sprintf("Too many attempts. Try again in %s", remaining)
-				m.lock.PassphraseInput.Reset()
-				m.lock.PassphraseInput.Focus()
+				m.security.clearDBStatus = fmt.Sprintf("Too many attempts. Try again in %s", remaining)
+				m.security.lock.PassphraseInput.Reset()
+				m.security.lock.PassphraseInput.Focus()
 				return m, nil, true
 			}
 			if entered == "" {
-				m.clearDBStatus = "Passphrase required"
-				m.lock.PassphraseInput.Reset()
-				m.lock.PassphraseInput.Focus()
+				m.security.clearDBStatus = "Passphrase required"
+				m.security.lock.PassphraseInput.Reset()
+				m.security.lock.PassphraseInput.Focus()
 				return m, nil, true
 			}
-			if util.HashPassphrase(entered) != m.lock.PassphraseHash {
+			if util.HashPassphrase(entered) != m.security.lock.PassphraseHash {
 				m.recordPassphraseFailure()
-				m.clearDBStatus = "Incorrect passphrase"
-				m.lock.PassphraseInput.Reset()
-				m.lock.PassphraseInput.Focus()
-				entered = ""
+				m.security.clearDBStatus = "Incorrect passphrase"
+				m.security.lock.PassphraseInput.Reset()
+				m.security.lock.PassphraseInput.Focus()
 				return m, nil, true
 			}
 			m.clearPassphraseFailures()
-			entered = ""
 		}
 		if err := m.db.ClearDatabase(m.ctx); err != nil {
 			m.err = err
@@ -210,138 +168,125 @@ func (m DashboardModel) handleModalConfirm(msg tea.KeyMsg) (DashboardModel, tea.
 				m.setStatusError(fmt.Sprintf("Error loading workspaces: %v", err))
 			} else {
 				m.activeWorkspaceIdx = 0
-				m.pendingWorkspaceID = wsID
-				m.initializingSprints = true
-				m.textInput.Placeholder = "How many sprints? (1-8)"
-				m.textInput.Reset()
-				m.textInput.Focus()
-				m.lock.PassphraseHash = ""
+				m.modal.pendingWorkspaceID = wsID
+				m.modal.initializingSprints = true
+				m.inputs.textInput.Placeholder = "How many sprints? (1-8)"
+				m.inputs.textInput.Reset()
+				m.inputs.textInput.Focus()
+				m.security.lock.PassphraseHash = ""
 				m.Message = "Database cleared. Set sprint count to start."
 			}
 		}
-		m.confirmingClearDB = false
-		m.clearDBNeedsPass = false
-		m.clearDBStatus = ""
-		m.lock.PassphraseInput.Reset()
+		m.security.confirmingClearDB = false
+		m.security.clearDBNeedsPass = false
+		m.security.clearDBStatus = ""
+		m.security.lock.PassphraseInput.Reset()
 		return m, nil, true
 	}
-	if m.changingPassphrase {
-		switch m.passphraseStage {
+	if m.security.changingPassphrase {
+		switch m.security.passphraseStage {
 		case 0:
-			current := strings.TrimSpace(m.passphraseCurrent.Value())
+			current := strings.TrimSpace(m.inputs.passphraseCurrent.Value())
 			if limited, wait := m.passphraseRateLimited(); limited {
 				remaining := wait.Round(time.Second)
 				if remaining < time.Second {
 					remaining = time.Second
 				}
-				m.passphraseStatus = fmt.Sprintf("Too many attempts. Try again in %s", remaining)
-				m.passphraseCurrent.Reset()
-				m.passphraseCurrent.Focus()
+				m.security.passphraseStatus = fmt.Sprintf("Too many attempts. Try again in %s", remaining)
+				m.inputs.passphraseCurrent.Reset()
+				m.inputs.passphraseCurrent.Focus()
 				return m, nil, true
 			}
-			if m.lock.PassphraseHash != "" && util.HashPassphrase(current) != m.lock.PassphraseHash {
+			if m.security.lock.PassphraseHash != "" && util.HashPassphrase(current) != m.security.lock.PassphraseHash {
 				m.recordPassphraseFailure()
-				m.passphraseStatus = "Incorrect current passphrase"
-				m.passphraseCurrent.Reset()
-				m.passphraseCurrent.Focus()
-				current = ""
+				m.security.passphraseStatus = "Incorrect current passphrase"
+				m.inputs.passphraseCurrent.Reset()
+				m.inputs.passphraseCurrent.Focus()
 				return m, nil, true
 			}
 			m.clearPassphraseFailures()
-			current = ""
-			m.passphraseStage = 1
-			m.passphraseStatus = ""
-			m.passphraseNew.Focus()
+			m.security.passphraseStage = 1
+			m.security.passphraseStatus = ""
+			m.inputs.passphraseNew.Focus()
 			return m, nil, true
 		case 1:
-			next := strings.TrimSpace(m.passphraseNew.Value())
+			next := strings.TrimSpace(m.inputs.passphraseNew.Value())
 			if next == "" {
-				m.passphraseStatus = "New passphrase required"
-				m.passphraseNew.Reset()
-				m.passphraseNew.Focus()
+				m.security.passphraseStatus = "New passphrase required"
+				m.inputs.passphraseNew.Reset()
+				m.inputs.passphraseNew.Focus()
 				return m, nil, true
 			}
 			if err := util.ValidatePassphrase(next); err != nil {
-				m.passphraseStatus = err.Error()
-				m.passphraseNew.Reset()
-				m.passphraseNew.Focus()
-				next = ""
+				m.security.passphraseStatus = err.Error()
+				m.inputs.passphraseNew.Reset()
+				m.inputs.passphraseNew.Focus()
 				return m, nil, true
 			}
-			m.passphraseStage = 2
-			m.passphraseStatus = ""
-			m.passphraseConfirm.Focus()
+			m.security.passphraseStage = 2
+			m.security.passphraseStatus = ""
+			m.inputs.passphraseConfirm.Focus()
 			return m, nil, true
 		case 2:
-			next := strings.TrimSpace(m.passphraseNew.Value())
-			confirm := strings.TrimSpace(m.passphraseConfirm.Value())
+			next := strings.TrimSpace(m.inputs.passphraseNew.Value())
+			confirm := strings.TrimSpace(m.inputs.passphraseConfirm.Value())
 			if next == "" {
-				m.passphraseStatus = "New passphrase required"
-				m.passphraseNew.Focus()
-				next = ""
-				confirm = ""
+				m.security.passphraseStatus = "New passphrase required"
+				m.inputs.passphraseNew.Focus()
 				return m, nil, true
 			}
 			if err := util.ValidatePassphrase(next); err != nil {
-				m.passphraseStatus = err.Error()
-				m.passphraseConfirm.Reset()
-				m.passphraseConfirm.Focus()
-				next = ""
-				confirm = ""
+				m.security.passphraseStatus = err.Error()
+				m.inputs.passphraseConfirm.Reset()
+				m.inputs.passphraseConfirm.Focus()
 				return m, nil, true
 			}
 			if next != confirm {
-				m.passphraseStatus = "Passphrases do not match"
-				m.passphraseConfirm.Reset()
-				m.passphraseConfirm.Focus()
-				next = ""
-				confirm = ""
+				m.security.passphraseStatus = "Passphrases do not match"
+				m.inputs.passphraseConfirm.Reset()
+				m.inputs.passphraseConfirm.Focus()
 				return m, nil, true
 			}
 			if next == "" {
-				m.passphraseStatus = "New passphrase required"
-				m.passphraseNew.Reset()
-				m.passphraseNew.Focus()
-				next = ""
-				confirm = ""
+				m.security.passphraseStatus = "New passphrase required"
+				m.inputs.passphraseNew.Reset()
+				m.inputs.passphraseNew.Focus()
 				return m, nil, true
 			}
 			encrypted := m.db.EncryptionStatus().DatabaseEncrypted
 			encryptErr := error(nil)
 			if encrypted {
 				if err := m.db.RekeyDB(m.ctx, next); err != nil && err != database.ErrSQLCipherUnavailable {
-					encryptErr = err
-					m.passphraseStatus = fmt.Sprintf("Failed to update DB encryption: %v", err)
-					m.passphraseConfirm.Reset()
-					m.passphraseConfirm.Focus()
+					m.security.passphraseStatus = fmt.Sprintf("Failed to update DB encryption: %v", err)
+					m.inputs.passphraseConfirm.Reset()
+					m.inputs.passphraseConfirm.Focus()
 					return m, nil, true
 				} else if err == database.ErrSQLCipherUnavailable {
 					encryptErr = err
-					m.passphraseStatus = "SQLCipher unavailable; UI-only lock"
+					m.security.passphraseStatus = "SQLCipher unavailable; UI-only lock"
 				}
 			} else {
 				if err := m.db.EncryptDatabase(m.ctx, next); err != nil && err != database.ErrSQLCipherUnavailable {
-					encryptErr = err
 					if !m.db.DatabaseHasData(m.ctx) {
 						if recErr := m.db.RecreateEncryptedDatabase(m.ctx, next); recErr != nil {
-							m.passphraseStatus = fmt.Sprintf("Failed to update DB encryption: %v", recErr)
-							m.passphraseConfirm.Reset()
-							m.passphraseConfirm.Focus()
+							m.security.passphraseStatus = fmt.Sprintf("Failed to update DB encryption: %v", recErr)
+							m.inputs.passphraseConfirm.Reset()
+							m.inputs.passphraseConfirm.Focus()
 							return m, nil, true
 						}
 					} else {
-						m.passphraseStatus = fmt.Sprintf("Failed to update DB encryption: %v", err)
-						m.passphraseConfirm.Reset()
-						m.passphraseConfirm.Focus()
+						m.security.passphraseStatus = fmt.Sprintf("Failed to update DB encryption: %v", err)
+						m.inputs.passphraseConfirm.Reset()
+						m.inputs.passphraseConfirm.Focus()
 						return m, nil, true
 					}
 				} else if err == database.ErrSQLCipherUnavailable {
 					encryptErr = err
-					m.passphraseStatus = "SQLCipher unavailable; UI-only lock"
+					m.security.passphraseStatus = "SQLCipher unavailable; UI-only lock"
 				}
 			}
-			m.lock.PassphraseHash = util.HashPassphrase(next)
-			if err := m.db.SetSetting(m.ctx, "passphrase_hash", m.lock.PassphraseHash); err != nil {
+			m.security.lock.PassphraseHash = util.HashPassphrase(next)
+			if err := m.db.SetSetting(m.ctx, "passphrase_hash", m.security.lock.PassphraseHash); err != nil {
 				m.setStatusError(fmt.Sprintf("Error saving passphrase: %v", err))
 			}
 			if encryptErr == database.ErrSQLCipherUnavailable {
@@ -349,15 +294,13 @@ func (m DashboardModel) handleModalConfirm(msg tea.KeyMsg) (DashboardModel, tea.
 			} else if !m.db.EncryptionStatus().DatabaseEncrypted {
 				m.setStatusError("Passphrase set but database remains unencrypted")
 			}
-			m.changingPassphrase = false
-			m.passphraseStage = 0
-			m.passphraseStatus = ""
-			m.passphraseCurrent.Reset()
-			m.passphraseNew.Reset()
-			m.passphraseConfirm.Reset()
+			m.security.changingPassphrase = false
+			m.security.passphraseStage = 0
+			m.security.passphraseStatus = ""
+			m.inputs.passphraseCurrent.Reset()
+			m.inputs.passphraseNew.Reset()
+			m.inputs.passphraseConfirm.Reset()
 			m.clearPassphraseFailures()
-			next = ""
-			confirm = ""
 			m.Message = "Passphrase updated."
 			if m.day.ID > 0 {
 				m.refreshData(m.day.ID)
@@ -372,16 +315,16 @@ func (m DashboardModel) handleModalConfirm(msg tea.KeyMsg) (DashboardModel, tea.
 		m.search.ArchiveOnly = false
 		return m, nil, true
 	}
-	if m.journaling {
-		text := m.journalInput.Value()
+	if m.modal.journaling {
+		text := m.inputs.journalInput.Value()
 		if strings.TrimSpace(text) != "" {
 			var sID, gID *int64
 			if m.timer.ActiveSprint != nil {
 				id := m.timer.ActiveSprint.ID
 				sID = &id
 			}
-			if m.editingGoalID > 0 {
-				id := m.editingGoalID
+			if m.modal.editingGoalID > 0 {
+				id := m.modal.editingGoalID
 				gID = &id
 			}
 			activeWS := m.workspaces[m.activeWorkspaceIdx]
@@ -391,35 +334,35 @@ func (m DashboardModel) handleModalConfirm(msg tea.KeyMsg) (DashboardModel, tea.
 				m.refreshData(m.day.ID)
 			}
 		}
-		m.journaling, m.editingGoalID = false, 0
-		m.journalInput.Reset()
+		m.modal.journaling, m.modal.editingGoalID = false, 0
+		m.inputs.journalInput.Reset()
 		return m, nil, true
 	}
-	if m.creatingWorkspace {
-		name := m.textInput.Value()
+	if m.modal.creatingWorkspace {
+		name := m.inputs.textInput.Value()
 		if name != "" {
 			newID, err := m.db.CreateWorkspace(m.ctx, name, strings.ToLower(name))
 			if err == nil {
-				m.pendingWorkspaceID, m.creatingWorkspace, m.initializingSprints = newID, false, true
-				m.textInput.Placeholder = "How many sprints?"
-				m.textInput.Reset()
+				m.modal.pendingWorkspaceID, m.modal.creatingWorkspace, m.modal.initializingSprints = newID, false, true
+				m.inputs.textInput.Placeholder = "How many sprints?"
+				m.inputs.textInput.Reset()
 			} else {
 				m.err = err
-				m.creatingWorkspace = false
+				m.modal.creatingWorkspace = false
 			}
 		}
 		return m, nil, true
 	}
-	if m.initializingSprints {
-		val := m.textInput.Value()
+	if m.modal.initializingSprints {
+		val := m.inputs.textInput.Value()
 		if num, err := strconv.Atoi(val); err == nil && num > 0 && num <= 8 {
-			if err := m.db.BootstrapDay(m.ctx, m.pendingWorkspaceID, num); err != nil {
+			if err := m.db.BootstrapDay(m.ctx, m.modal.pendingWorkspaceID, num); err != nil {
 				m.setStatusError(fmt.Sprintf("Error creating sprints: %v", err))
 			} else if err := m.loadWorkspaces(); err != nil {
 				m.setStatusError(fmt.Sprintf("Error loading workspaces: %v", err))
 			} else {
 				for i, ws := range m.workspaces {
-					if ws.ID == m.pendingWorkspaceID {
+					if ws.ID == m.modal.pendingWorkspaceID {
 						m.activeWorkspaceIdx = i
 						break
 					}
@@ -432,14 +375,14 @@ func (m DashboardModel) handleModalConfirm(msg tea.KeyMsg) (DashboardModel, tea.
 				}
 			}
 		}
-		m.initializingSprints, m.pendingWorkspaceID = false, 0
-		m.textInput.Reset()
+		m.modal.initializingSprints, m.modal.pendingWorkspaceID = false, 0
+		m.inputs.textInput.Reset()
 		return m, nil, true
 	}
-	if m.tagging {
-		raw := strings.Fields(m.tagInput.Value())
+	if m.modal.tagging {
+		raw := strings.Fields(m.inputs.tagInput.Value())
 		tags := make(map[string]bool)
-		for t, selected := range m.tagSelected {
+		for t, selected := range m.modal.tagSelected {
 			if selected {
 				tags[t] = true
 			}
@@ -456,21 +399,21 @@ func (m DashboardModel) handleModalConfirm(msg tea.KeyMsg) (DashboardModel, tea.
 		for t := range tags {
 			out = append(out, t)
 		}
-		if err := m.db.SetGoalTags(m.ctx, m.editingGoalID, out); err != nil {
+		if err := m.db.SetGoalTags(m.ctx, m.modal.editingGoalID, out); err != nil {
 			m.setStatusError(fmt.Sprintf("Error saving tags: %v", err))
 		} else {
 			m.invalidateGoalCache()
 			m.refreshData(m.day.ID)
 		}
-		m.tagging, m.editingGoalID = false, 0
-		m.tagInput.Reset()
-		m.tagSelected = make(map[string]bool)
-		m.tagCursor = 0
+		m.modal.tagging, m.modal.editingGoalID = false, 0
+		m.inputs.tagInput.Reset()
+		m.modal.tagSelected = make(map[string]bool)
+		m.modal.tagCursor = 0
 		return m, nil, true
 	}
-	if m.themePicking {
-		if len(m.themeNames) > 0 && m.themeCursor < len(m.themeNames) {
-			name := m.themeNames[m.themeCursor]
+	if m.modal.themePicking {
+		if len(m.modal.themeNames) > 0 && m.modal.themeCursor < len(m.modal.themeNames) {
+			name := m.modal.themeNames[m.modal.themeCursor]
 			activeWS := m.workspaces[m.activeWorkspaceIdx]
 			if err := m.db.UpdateWorkspaceTheme(m.ctx, activeWS.ID, name); err != nil {
 				m.setStatusError(fmt.Sprintf("Error updating workspace theme: %v", err))
@@ -479,64 +422,64 @@ func (m DashboardModel) handleModalConfirm(msg tea.KeyMsg) (DashboardModel, tea.
 				SetTheme(name)
 			}
 		}
-		m.themePicking = false
+		m.modal.themePicking = false
 		return m, nil, true
 	}
-	if m.depPicking {
+	if m.modal.depPicking {
 		var deps []int64
-		for id, selected := range m.depSelected {
+		for id, selected := range m.modal.depSelected {
 			if selected {
 				deps = append(deps, id)
 			}
 		}
-		if m.editingGoalID > 0 {
-			if err := m.db.SetGoalDependencies(m.ctx, m.editingGoalID, deps); err != nil {
+		if m.modal.editingGoalID > 0 {
+			if err := m.db.SetGoalDependencies(m.ctx, m.modal.editingGoalID, deps); err != nil {
 				m.setStatusError(fmt.Sprintf("Error saving dependencies: %v", err))
 			} else {
 				m.invalidateGoalCache()
 				m.refreshData(m.day.ID)
 			}
 		}
-		m.depPicking, m.editingGoalID = false, 0
-		m.depSelected = make(map[int64]bool)
+		m.modal.depPicking, m.modal.editingGoalID = false, 0
+		m.modal.depSelected = make(map[int64]bool)
 		return m, nil, true
 	}
-	if m.settingRecurrence {
-		if m.editingGoalID > 0 {
-			rule := m.recurrenceMode
+	if m.modal.settingRecurrence {
+		if m.modal.editingGoalID > 0 {
+			rule := m.modal.recurrenceMode
 			switch rule {
 			case "none":
-				if err := m.db.UpdateGoalRecurrence(m.ctx, m.editingGoalID, ""); err != nil {
+				if err := m.db.UpdateGoalRecurrence(m.ctx, m.modal.editingGoalID, ""); err != nil {
 					m.setStatusError(fmt.Sprintf("Error saving recurrence: %v", err))
 				}
 			case "daily":
-				if err := m.db.UpdateGoalRecurrence(m.ctx, m.editingGoalID, "daily"); err != nil {
+				if err := m.db.UpdateGoalRecurrence(m.ctx, m.modal.editingGoalID, "daily"); err != nil {
 					m.setStatusError(fmt.Sprintf("Error saving recurrence: %v", err))
 				}
 			case "weekly":
 				var days []string
-				for _, d := range m.weekdayOptions {
-					if m.recurrenceSelected[d] {
+				for _, d := range m.modal.weekdayOptions {
+					if m.modal.recurrenceSelected[d] {
 						days = append(days, d)
 					}
 				}
 				if len(days) == 0 {
 					m.Message = "Select at least one weekday."
 				} else {
-					if err := m.db.UpdateGoalRecurrence(m.ctx, m.editingGoalID, "weekly:"+strings.Join(days, ",")); err != nil {
+					if err := m.db.UpdateGoalRecurrence(m.ctx, m.modal.editingGoalID, "weekly:"+strings.Join(days, ",")); err != nil {
 						m.setStatusError(fmt.Sprintf("Error saving recurrence: %v", err))
 					}
 				}
 			case "monthly":
 				var months []string
 				var days []string
-				for _, mo := range m.monthOptions {
-					if m.recurrenceSelected[mo] {
+				for _, mo := range m.modal.monthOptions {
+					if m.modal.recurrenceSelected[mo] {
 						months = append(months, mo)
 					}
 				}
-				for _, d := range m.monthDayOptions {
-					if m.recurrenceSelected["day:"+d] {
+				for _, d := range m.modal.monthDayOptions {
+					if m.modal.recurrenceSelected["day:"+d] {
 						days = append(days, d)
 					}
 				}
@@ -547,7 +490,7 @@ func (m DashboardModel) handleModalConfirm(msg tea.KeyMsg) (DashboardModel, tea.
 					m.Message = "Select at least one day."
 				default:
 					rule := fmt.Sprintf("monthly:months=%s;days=%s", strings.Join(months, ","), strings.Join(days, ","))
-					if err := m.db.UpdateGoalRecurrence(m.ctx, m.editingGoalID, rule); err != nil {
+					if err := m.db.UpdateGoalRecurrence(m.ctx, m.modal.editingGoalID, rule); err != nil {
 						m.setStatusError(fmt.Sprintf("Error saving recurrence: %v", err))
 					}
 				}
@@ -555,91 +498,91 @@ func (m DashboardModel) handleModalConfirm(msg tea.KeyMsg) (DashboardModel, tea.
 			m.invalidateGoalCache()
 			m.refreshData(m.day.ID)
 		}
-		m.settingRecurrence, m.editingGoalID = false, 0
-		m.recurrenceSelected = make(map[string]bool)
+		m.modal.settingRecurrence, m.modal.editingGoalID = false, 0
+		m.modal.recurrenceSelected = make(map[string]bool)
 		return m, nil, true
 	}
-	text := m.textInput.Value()
+	text := m.inputs.textInput.Value()
 	if text != "" {
-		if m.editingGoal {
-			if err := m.db.EditGoal(m.ctx, m.editingGoalID, text); err != nil {
+		if m.modal.editingGoal {
+			if err := m.db.EditGoal(m.ctx, m.modal.editingGoalID, text); err != nil {
 				m.setStatusError(fmt.Sprintf("Error updating goal: %v", err))
 			}
-		} else if m.editingGoalID > 0 {
-			if err := m.db.AddSubtask(m.ctx, text, m.editingGoalID); err != nil {
+		} else if m.modal.editingGoalID > 0 {
+			if err := m.db.AddSubtask(m.ctx, text, m.modal.editingGoalID); err != nil {
 				m.setStatusError(fmt.Sprintf("Error adding subtask: %v", err))
 			} else {
-				m.expandedState[m.editingGoalID] = true
+				m.view.expandedState[m.modal.editingGoalID] = true
 			}
 		} else {
-			if err := m.db.AddGoal(m.ctx, m.workspaces[m.activeWorkspaceIdx].ID, text, m.sprints[m.focusedColIdx].ID); err != nil {
+			if err := m.db.AddGoal(m.ctx, m.workspaces[m.activeWorkspaceIdx].ID, text, m.sprints[m.view.focusedColIdx].ID); err != nil {
 				m.setStatusError(fmt.Sprintf("Error adding goal: %v", err))
 			}
 		}
 		m.invalidateGoalCache()
 		m.refreshData(m.day.ID)
 	}
-	m.creatingGoal, m.editingGoal, m.editingGoalID = false, false, 0
-	m.textInput.Reset()
+	m.modal.creatingGoal, m.modal.editingGoal, m.modal.editingGoalID = false, false, 0
+	m.inputs.textInput.Reset()
 	return m, nil, true
 }
 
 func (m DashboardModel) handleModalInput(msg tea.Msg) (DashboardModel, tea.Cmd) {
 	var cmd tea.Cmd
-	if m.confirmingClearDB && m.clearDBNeedsPass {
-		m.lock.PassphraseInput, cmd = m.lock.PassphraseInput.Update(msg)
+	if m.security.confirmingClearDB && m.security.clearDBNeedsPass {
+		m.security.lock.PassphraseInput, cmd = m.security.lock.PassphraseInput.Update(msg)
 		return m, cmd
 	}
-	if m.changingPassphrase {
+	if m.security.changingPassphrase {
 		switch msg := msg.(type) {
 		case tea.KeyMsg:
-			switch m.passphraseStage {
+			switch m.security.passphraseStage {
 			case 0:
-				m.passphraseCurrent, cmd = m.passphraseCurrent.Update(msg)
+				m.inputs.passphraseCurrent, cmd = m.inputs.passphraseCurrent.Update(msg)
 			case 1:
-				m.passphraseNew, cmd = m.passphraseNew.Update(msg)
+				m.inputs.passphraseNew, cmd = m.inputs.passphraseNew.Update(msg)
 			case 2:
-				m.passphraseConfirm, cmd = m.passphraseConfirm.Update(msg)
+				m.inputs.passphraseConfirm, cmd = m.inputs.passphraseConfirm.Update(msg)
 			}
 		}
 		return m, cmd
 	}
-	if m.confirmingDelete {
+	if m.modal.confirmingDelete {
 		if keyMsg, ok := msg.(tea.KeyMsg); ok {
 			switch keyMsg.String() {
 			case "a":
-				if m.confirmDeleteGoalID > 0 {
-					if err := m.db.ArchiveGoal(m.ctx, m.confirmDeleteGoalID); err != nil {
+				if m.modal.confirmDeleteGoalID > 0 {
+					if err := m.db.ArchiveGoal(m.ctx, m.modal.confirmDeleteGoalID); err != nil {
 						m.setStatusError(fmt.Sprintf("Error archiving goal: %v", err))
 					} else {
 						m.invalidateGoalCache()
 						m.refreshData(m.day.ID)
 					}
 				}
-				m.confirmingDelete = false
-				m.confirmDeleteGoalID = 0
+				m.modal.confirmingDelete = false
+				m.modal.confirmDeleteGoalID = 0
 				return m, nil
 			case "d", "backspace":
-				if m.confirmDeleteGoalID > 0 {
-					if err := m.db.DeleteGoal(m.ctx, m.confirmDeleteGoalID); err != nil {
+				if m.modal.confirmDeleteGoalID > 0 {
+					if err := m.db.DeleteGoal(m.ctx, m.modal.confirmDeleteGoalID); err != nil {
 						m.setStatusError(fmt.Sprintf("Error deleting goal: %v", err))
 					} else {
 						m.invalidateGoalCache()
 						m.refreshData(m.day.ID)
 					}
 				}
-				m.confirmingDelete = false
-				m.confirmDeleteGoalID = 0
+				m.modal.confirmingDelete = false
+				m.modal.confirmDeleteGoalID = 0
 				return m, nil
 			}
 		}
 		return m, nil
 	}
-	if m.confirmingClearDB {
+	if m.security.confirmingClearDB {
 		if keyMsg, ok := msg.(tea.KeyMsg); ok {
 			switch keyMsg.String() {
 			case "c":
-				if m.clearDBNeedsPass {
+				if m.security.clearDBNeedsPass {
 					return m, nil
 				}
 				if err := m.db.ClearDatabase(m.ctx); err != nil {
@@ -652,108 +595,108 @@ func (m DashboardModel) handleModalInput(msg tea.Msg) (DashboardModel, tea.Cmd) 
 						m.setStatusError(fmt.Sprintf("Error loading workspaces: %v", err))
 					} else {
 						m.activeWorkspaceIdx = 0
-						m.pendingWorkspaceID = wsID
-						m.initializingSprints = true
-						m.textInput.Placeholder = "How many sprints? (1-8)"
-						m.textInput.Reset()
-						m.textInput.Focus()
-						m.lock.PassphraseHash = ""
+						m.modal.pendingWorkspaceID = wsID
+						m.modal.initializingSprints = true
+						m.inputs.textInput.Placeholder = "How many sprints? (1-8)"
+						m.inputs.textInput.Reset()
+						m.inputs.textInput.Focus()
+						m.security.lock.PassphraseHash = ""
 						m.Message = "Database cleared. Set sprint count to start."
 					}
 				}
-				m.confirmingClearDB = false
-				m.clearDBNeedsPass = false
-				m.clearDBStatus = ""
-				m.lock.PassphraseInput.Reset()
+				m.security.confirmingClearDB = false
+				m.security.clearDBNeedsPass = false
+				m.security.clearDBStatus = ""
+				m.security.lock.PassphraseInput.Reset()
 				return m, nil
 			}
 		}
 		return m, nil
 	}
-	if m.settingRecurrence {
+	if m.modal.settingRecurrence {
 		switch msg := msg.(type) {
 		case tea.KeyMsg:
 			switch msg.String() {
 			case "up", "k":
-				if m.recurrenceFocus == "mode" {
-					if m.recurrenceCursor > 0 {
-						m.recurrenceCursor--
+				if m.modal.recurrenceFocus == "mode" {
+					if m.modal.recurrenceCursor > 0 {
+						m.modal.recurrenceCursor--
 					}
-				} else if m.recurrenceFocus == "items" {
-					if m.recurrenceItemCursor > 0 {
-						m.recurrenceItemCursor--
+				} else if m.modal.recurrenceFocus == "items" {
+					if m.modal.recurrenceItemCursor > 0 {
+						m.modal.recurrenceItemCursor--
 					}
-				} else if m.recurrenceFocus == "days" {
-					if m.recurrenceDayCursor > 0 {
-						m.recurrenceDayCursor--
+				} else if m.modal.recurrenceFocus == "days" {
+					if m.modal.recurrenceDayCursor > 0 {
+						m.modal.recurrenceDayCursor--
 					}
 				}
 				return m, nil
 			case "down", "j":
-				if m.recurrenceFocus == "mode" {
-					if m.recurrenceCursor < len(m.recurrenceOptions)-1 {
-						m.recurrenceCursor++
+				if m.modal.recurrenceFocus == "mode" {
+					if m.modal.recurrenceCursor < len(m.modal.recurrenceOptions)-1 {
+						m.modal.recurrenceCursor++
 					}
-				} else if m.recurrenceFocus == "items" {
+				} else if m.modal.recurrenceFocus == "items" {
 					max := 0
-					if m.recurrenceMode == "weekly" {
-						max = len(m.weekdayOptions) - 1
-					} else if m.recurrenceMode == "monthly" {
-						max = len(m.monthOptions) - 1
+					if m.modal.recurrenceMode == "weekly" {
+						max = len(m.modal.weekdayOptions) - 1
+					} else if m.modal.recurrenceMode == "monthly" {
+						max = len(m.modal.monthOptions) - 1
 					}
-					if m.recurrenceItemCursor < max {
-						m.recurrenceItemCursor++
+					if m.modal.recurrenceItemCursor < max {
+						m.modal.recurrenceItemCursor++
 					}
-				} else if m.recurrenceFocus == "days" {
+				} else if m.modal.recurrenceFocus == "days" {
 					maxDay := m.monthlyMaxDay()
 					if maxDay <= 0 {
 						return m, nil
 					}
-					if m.recurrenceDayCursor < maxDay-1 {
-						m.recurrenceDayCursor++
+					if m.modal.recurrenceDayCursor < maxDay-1 {
+						m.modal.recurrenceDayCursor++
 					}
 				}
 				return m, nil
 			case "tab":
-				if m.recurrenceFocus == "items" && m.recurrenceMode == "monthly" {
-					m.recurrenceFocus = "days"
-				} else if m.recurrenceFocus == "days" {
-					m.recurrenceFocus = "mode"
-				} else if m.recurrenceFocus == "items" {
-					m.recurrenceFocus = "mode"
-				} else if len(m.recurrenceOptions) > 0 && m.recurrenceCursor < len(m.recurrenceOptions) {
-					m.recurrenceMode = m.recurrenceOptions[m.recurrenceCursor]
-					if m.recurrenceMode == "weekly" || m.recurrenceMode == "monthly" {
-						m.recurrenceFocus = "items"
+				if m.modal.recurrenceFocus == "items" && m.modal.recurrenceMode == "monthly" {
+					m.modal.recurrenceFocus = "days"
+				} else if m.modal.recurrenceFocus == "days" {
+					m.modal.recurrenceFocus = "mode"
+				} else if m.modal.recurrenceFocus == "items" {
+					m.modal.recurrenceFocus = "mode"
+				} else if len(m.modal.recurrenceOptions) > 0 && m.modal.recurrenceCursor < len(m.modal.recurrenceOptions) {
+					m.modal.recurrenceMode = m.modal.recurrenceOptions[m.modal.recurrenceCursor]
+					if m.modal.recurrenceMode == "weekly" || m.modal.recurrenceMode == "monthly" {
+						m.modal.recurrenceFocus = "items"
 					} else {
-						m.recurrenceFocus = "mode"
+						m.modal.recurrenceFocus = "mode"
 					}
 				}
 				return m, nil
 			case " ":
-				if m.recurrenceFocus == "items" {
-					switch m.recurrenceMode {
+				if m.modal.recurrenceFocus == "items" {
+					switch m.modal.recurrenceMode {
 					case "weekly":
-						if m.recurrenceItemCursor < len(m.weekdayOptions) {
-							key := m.weekdayOptions[m.recurrenceItemCursor]
-							m.recurrenceSelected[key] = !m.recurrenceSelected[key]
+						if m.modal.recurrenceItemCursor < len(m.modal.weekdayOptions) {
+							key := m.modal.weekdayOptions[m.modal.recurrenceItemCursor]
+							m.modal.recurrenceSelected[key] = !m.modal.recurrenceSelected[key]
 						}
 					case "monthly":
-						if m.recurrenceItemCursor < len(m.monthOptions) {
-							key := m.monthOptions[m.recurrenceItemCursor]
-							m.recurrenceSelected[key] = !m.recurrenceSelected[key]
+						if m.modal.recurrenceItemCursor < len(m.modal.monthOptions) {
+							key := m.modal.monthOptions[m.modal.recurrenceItemCursor]
+							m.modal.recurrenceSelected[key] = !m.modal.recurrenceSelected[key]
 							m.pruneMonthlyDays(m.monthlyMaxDay())
 						}
 					}
-				} else if m.recurrenceFocus == "days" {
+				} else if m.modal.recurrenceFocus == "days" {
 					maxDay := m.monthlyMaxDay()
-					if maxDay > 0 && m.recurrenceDayCursor < maxDay {
-						key := "day:" + m.monthDayOptions[m.recurrenceDayCursor]
-						m.recurrenceSelected[key] = !m.recurrenceSelected[key]
+					if maxDay > 0 && m.modal.recurrenceDayCursor < maxDay {
+						key := "day:" + m.modal.monthDayOptions[m.modal.recurrenceDayCursor]
+						m.modal.recurrenceSelected[key] = !m.modal.recurrenceSelected[key]
 					}
-				} else if m.recurrenceFocus == "mode" {
-					if len(m.recurrenceOptions) > 0 && m.recurrenceCursor < len(m.recurrenceOptions) {
-						m.recurrenceMode = m.recurrenceOptions[m.recurrenceCursor]
+				} else if m.modal.recurrenceFocus == "mode" {
+					if len(m.modal.recurrenceOptions) > 0 && m.modal.recurrenceCursor < len(m.modal.recurrenceOptions) {
+						m.modal.recurrenceMode = m.modal.recurrenceOptions[m.modal.recurrenceCursor]
 					}
 				}
 				return m, nil
@@ -761,71 +704,71 @@ func (m DashboardModel) handleModalInput(msg tea.Msg) (DashboardModel, tea.Cmd) 
 		}
 		return m, nil
 	}
-	if m.depPicking {
+	if m.modal.depPicking {
 		switch msg := msg.(type) {
 		case tea.KeyMsg:
 			switch msg.String() {
 			case "up", "k":
-				if m.depCursor > 0 {
-					m.depCursor--
+				if m.modal.depCursor > 0 {
+					m.modal.depCursor--
 				}
 				return m, nil
 			case "down", "j":
-				if m.depCursor < len(m.depOptions)-1 {
-					m.depCursor++
+				if m.modal.depCursor < len(m.modal.depOptions)-1 {
+					m.modal.depCursor++
 				}
 				return m, nil
 			case " ":
-				if len(m.depOptions) > 0 && m.depCursor < len(m.depOptions) {
-					id := m.depOptions[m.depCursor].ID
-					m.depSelected[id] = !m.depSelected[id]
+				if len(m.modal.depOptions) > 0 && m.modal.depCursor < len(m.modal.depOptions) {
+					id := m.modal.depOptions[m.modal.depCursor].ID
+					m.modal.depSelected[id] = !m.modal.depSelected[id]
 				}
 				return m, nil
 			}
 		}
 		return m, nil
 	}
-	if m.themePicking {
+	if m.modal.themePicking {
 		switch msg := msg.(type) {
 		case tea.KeyMsg:
 			switch msg.String() {
 			case "up", "k":
-				if m.themeCursor > 0 {
-					m.themeCursor--
+				if m.modal.themeCursor > 0 {
+					m.modal.themeCursor--
 				}
 				return m, nil
 			case "down", "j":
-				if m.themeCursor < len(m.themeNames)-1 {
-					m.themeCursor++
+				if m.modal.themeCursor < len(m.modal.themeNames)-1 {
+					m.modal.themeCursor++
 				}
 				return m, nil
 			}
 		}
 		return m, nil
 	}
-	if m.tagging {
+	if m.modal.tagging {
 		switch msg := msg.(type) {
 		case tea.KeyMsg:
 			switch msg.String() {
 			case "up", "k":
-				if m.tagCursor > 0 {
-					m.tagCursor--
+				if m.modal.tagCursor > 0 {
+					m.modal.tagCursor--
 				}
 				return m, nil
 			case "down", "j":
-				if m.tagCursor < len(m.defaultTags)-1 {
-					m.tagCursor++
+				if m.modal.tagCursor < len(m.modal.defaultTags)-1 {
+					m.modal.tagCursor++
 				}
 				return m, nil
 			case "tab":
-				if len(m.defaultTags) > 0 && m.tagCursor < len(m.defaultTags) {
-					tag := m.defaultTags[m.tagCursor]
-					m.tagSelected[tag] = !m.tagSelected[tag]
+				if len(m.modal.defaultTags) > 0 && m.modal.tagCursor < len(m.modal.defaultTags) {
+					tag := m.modal.defaultTags[m.modal.tagCursor]
+					m.modal.tagSelected[tag] = !m.modal.tagSelected[tag]
 				}
 				return m, nil
 			}
 		}
-		m.tagInput, cmd = m.tagInput.Update(msg)
+		m.inputs.tagInput, cmd = m.inputs.tagInput.Update(msg)
 		return m, cmd
 	}
 	if m.search.Active {
@@ -879,10 +822,10 @@ func (m DashboardModel) handleModalInput(msg tea.Msg) (DashboardModel, tea.Cmd) 
 		}
 		return m, cmd
 	}
-	if m.journaling {
-		m.journalInput, cmd = m.journalInput.Update(msg)
+	if m.modal.journaling {
+		m.inputs.journalInput, cmd = m.inputs.journalInput.Update(msg)
 		return m, cmd
 	}
-	m.textInput, cmd = m.textInput.Update(msg)
+	m.inputs.textInput, cmd = m.inputs.textInput.Update(msg)
 	return m, cmd
 }

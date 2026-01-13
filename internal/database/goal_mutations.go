@@ -19,9 +19,9 @@ func (d *Database) AddGoal(ctx context.Context, workspaceID int64, description s
 	var maxRank int
 	var err error
 	if sprintID > 0 {
-		err = d.DB.QueryRowContext(ctx, "SELECT COALESCE(MAX(rank), 0) FROM goals WHERE sprint_id = ?", sprintID).Scan(&maxRank)
+		maxRank, err = d.getMaxGoalRank(ctx, sprintID)
 	} else {
-		err = d.DB.QueryRowContext(ctx, "SELECT COALESCE(MAX(rank), 0) FROM goals WHERE sprint_id IS NULL AND workspace_id = ?", workspaceID).Scan(&maxRank)
+		maxRank, err = d.getMaxBacklogRank(ctx, workspaceID)
 	}
 	if err != nil {
 		return wrapGoalErr("add", 0, err)
@@ -30,12 +30,7 @@ func (d *Database) AddGoal(ctx context.Context, workspaceID int64, description s
 	tags := util.TagsToJSON(util.ExtractTags(description))
 	query := `INSERT INTO goals (workspace_id, description, sprint_id, status, rank, tags) VALUES (?, ?, ?, 'pending', ?, ?)`
 
-	var sprintIDArg interface{}
-	if sprintID > 0 {
-		sprintIDArg = sprintID
-	} else {
-		sprintIDArg = nil // SQL NULL
-	}
+	sprintIDArg := nullableInt64(sprintID)
 
 	_, err = d.DB.ExecContext(ctx, query, workspaceID, description, sprintIDArg, maxRank+1, tags)
 	return wrapGoalErr("add", 0, err)
@@ -65,9 +60,9 @@ func (d *Database) AddGoalDetailed(ctx context.Context, workspaceID int64, sprin
 	var maxRank int
 	var err error
 	if sprintID > 0 {
-		err = d.DB.QueryRowContext(ctx, "SELECT COALESCE(MAX(rank), 0) FROM goals WHERE sprint_id = ?", sprintID).Scan(&maxRank)
+		maxRank, err = d.getMaxGoalRank(ctx, sprintID)
 	} else {
-		err = d.DB.QueryRowContext(ctx, "SELECT COALESCE(MAX(rank), 0) FROM goals WHERE sprint_id IS NULL AND workspace_id = ?", workspaceID).Scan(&maxRank)
+		maxRank, err = d.getMaxBacklogRank(ctx, workspaceID)
 	}
 	if err != nil {
 		return wrapGoalErr("add detailed", 0, err)
@@ -85,23 +80,14 @@ func (d *Database) AddGoalDetailed(ctx context.Context, workspaceID int64, sprin
 		return wrapGoalErr("add detailed", 0, err)
 	}
 
-	var sprintIDArg interface{}
-	if sprintID > 0 {
-		sprintIDArg = sprintID
-	} else {
-		sprintIDArg = nil
-	}
-	var notesArg interface{}
+	sprintIDArg := nullableInt64(sprintID)
+	notesArg := nullableString("")
 	if strings.TrimSpace(seed.Notes) != "" {
-		notesArg = seed.Notes
-	} else {
-		notesArg = nil
+		notesArg = nullableString(seed.Notes)
 	}
-	var recurrenceArg interface{}
+	recurrenceArg := nullableString("")
 	if strings.TrimSpace(seed.Recurrence) != "" {
-		recurrenceArg = seed.Recurrence
-	} else {
-		recurrenceArg = nil
+		recurrenceArg = nullableString(seed.Recurrence)
 	}
 
 	_, err = d.DB.ExecContext(ctx, `INSERT INTO goals (workspace_id, description, sprint_id, status, rank, tags, priority, effort, notes, recurrence_rule, links)
@@ -122,7 +108,7 @@ func (d *Database) AddSubtask(ctx context.Context, description string, parentID 
 	}
 
 	var maxRank int
-	err = d.DB.QueryRowContext(ctx, "SELECT COALESCE(MAX(rank), 0) FROM goals WHERE parent_id = ?", parentID).Scan(&maxRank)
+	maxRank, err = d.getMaxSubtaskRank(ctx, parentID)
 	if err != nil {
 		return wrapGoalErr("add subtask", parentID, err)
 	}
@@ -144,7 +130,7 @@ func (d *Database) AddSubtaskDetailed(ctx context.Context, parentID int64, seed 
 	}
 
 	var maxRank int
-	if err := d.DB.QueryRowContext(ctx, "SELECT COALESCE(MAX(rank), 0) FROM goals WHERE parent_id = ?", parentID).Scan(&maxRank); err != nil {
+	if maxRank, err = d.getMaxSubtaskRank(ctx, parentID); err != nil {
 		return wrapGoalErr("add subtask detailed", parentID, err)
 	}
 
@@ -160,17 +146,13 @@ func (d *Database) AddSubtaskDetailed(ctx context.Context, parentID int64, seed 
 		return wrapGoalErr("add subtask detailed", parentID, err)
 	}
 
-	var notesArg interface{}
+	notesArg := nullableString("")
 	if strings.TrimSpace(seed.Notes) != "" {
-		notesArg = seed.Notes
-	} else {
-		notesArg = nil
+		notesArg = nullableString(seed.Notes)
 	}
-	var recurrenceArg interface{}
+	recurrenceArg := nullableString("")
 	if strings.TrimSpace(seed.Recurrence) != "" {
-		recurrenceArg = seed.Recurrence
-	} else {
-		recurrenceArg = nil
+		recurrenceArg = nullableString(seed.Recurrence)
 	}
 
 	_, err = d.DB.ExecContext(ctx, `INSERT INTO goals (description, parent_id, sprint_id, workspace_id, status, rank, tags, priority, effort, notes, recurrence_rule, links)
@@ -304,32 +286,26 @@ func (d *Database) PauseTaskTimer(ctx context.Context, goalID int64) error {
 }
 
 func (d *Database) MoveGoal(ctx context.Context, goalID int64, targetSprintID int64) error {
-	ctx, cancel := d.withTimeout(ctx, defaultDBTimeout)
-	defer cancel()
-	var sprintArg interface{}
-	if targetSprintID == 0 {
-		sprintArg = nil // SQL NULL for Backlog
-	} else {
-		sprintArg = targetSprintID
-	}
-
-	_, err := d.DB.ExecContext(ctx, "UPDATE goals SET sprint_id = ? WHERE id = ?", sprintArg, goalID)
-	return wrapGoalErr("move", goalID, err)
+	return d.withDBContext(ctx, func(ctx context.Context) error {
+		sprintArg := nullableInt64(targetSprintID)
+		_, err := d.DB.ExecContext(ctx, "UPDATE goals SET sprint_id = ? WHERE id = ?", sprintArg, goalID)
+		return wrapGoalErr("move", goalID, err)
+	})
 }
 
 func (d *Database) EditGoal(ctx context.Context, goalID int64, newDescription string) error {
-	ctx, cancel := d.withTimeout(ctx, defaultDBTimeout)
-	defer cancel()
-	tags := util.TagsToJSON(util.ExtractTags(newDescription))
-	_, err := d.DB.ExecContext(ctx, "UPDATE goals SET description = ?, tags = ? WHERE id = ?", newDescription, tags, goalID)
-	return wrapGoalErr("edit", goalID, err)
+	return d.withDBContext(ctx, func(ctx context.Context) error {
+		tags := util.TagsToJSON(util.ExtractTags(newDescription))
+		_, err := d.DB.ExecContext(ctx, "UPDATE goals SET description = ?, tags = ? WHERE id = ?", newDescription, tags, goalID)
+		return wrapGoalErr("edit", goalID, err)
+	})
 }
 
 func (d *Database) DeleteGoal(ctx context.Context, goalID int64) error {
-	ctx, cancel := d.withTimeout(ctx, defaultDBTimeout)
-	defer cancel()
-	_, err := d.DB.ExecContext(ctx, "DELETE FROM goals WHERE id = ?", goalID)
-	return wrapGoalErr("delete", goalID, err)
+	return d.withDBContext(ctx, func(ctx context.Context) error {
+		_, err := d.DB.ExecContext(ctx, "DELETE FROM goals WHERE id = ?", goalID)
+		return wrapGoalErr("delete", goalID, err)
+	})
 }
 
 func (d *Database) ArchiveGoal(ctx context.Context, goalID int64) error {

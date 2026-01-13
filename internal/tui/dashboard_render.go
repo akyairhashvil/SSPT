@@ -57,7 +57,7 @@ func (m DashboardModel) View() string {
 		return "Initializing..."
 	}
 
-	if m.lock.Locked {
+	if m.security.lock.Locked {
 		return m.renderLockScreen()
 	}
 

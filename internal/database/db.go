@@ -78,6 +78,20 @@ func (d *Database) withTimeout(ctx context.Context, timeout time.Duration) (cont
 	return context.WithTimeout(ctx, timeout)
 }
 
+// withDBContext wraps a database operation with timeout handling.
+func (d *Database) withDBContext(ctx context.Context, fn func(ctx context.Context) error) error {
+	ctx, cancel := d.withTimeout(ctx, defaultDBTimeout)
+	defer cancel()
+	return fn(ctx)
+}
+
+// withDBContextResult wraps a database operation that returns a value.
+func withDBContextResult[T any](d *Database, ctx context.Context, fn func(ctx context.Context) (T, error)) (T, error) {
+	ctx, cancel := d.withTimeout(ctx, defaultDBTimeout)
+	defer cancel()
+	return fn(ctx)
+}
+
 func (d *Database) createTables(ctx context.Context) error {
 	ctx, cancel := d.withTimeout(ctx, defaultDBTimeout)
 	defer cancel()
@@ -170,7 +184,7 @@ func (d *Database) createTables(ctx context.Context) error {
 
 	// Migrations for existing databases
 	if err := d.migrate(ctx); err != nil {
-		return err
+		return fmt.Errorf("migrate: %w", err)
 	}
 	return nil
 }
@@ -242,6 +256,7 @@ func (d *Database) migrate(ctx context.Context) error {
 	for _, query := range migrations {
 		if _, err := d.DB.ExecContext(ctx, query); err != nil {
 			if isIgnorableMigrationErr(err) {
+				util.LogError("migration skipped", fmt.Errorf("%w (%s)", err, query))
 				continue
 			}
 			return fmt.Errorf("migration failed: %w (%s)", err, query)
@@ -319,14 +334,14 @@ func (d *Database) RekeyDB(ctx context.Context, key string) error {
 	}
 	escapedKey, err := pragmaValue(key)
 	if err != nil {
-		return err
+		return fmt.Errorf("rekey pragma value: %w", err)
 	}
 	_, err = d.DB.ExecContext(ctx, fmt.Sprintf("PRAGMA rekey = '%s'", escapedKey))
 	if err != nil {
 		if strings.Contains(strings.ToLower(err.Error()), "no such pragma") {
 			return ErrSQLCipherUnavailable
 		}
-		return err
+		return fmt.Errorf("rekey pragma: %w", err)
 	}
 	d.cipherAvailable, d.cipherVersion = d.detectSQLCipher(ctx)
 	if sqlcipherCompiled() {
@@ -335,7 +350,7 @@ func (d *Database) RekeyDB(ctx context.Context, key string) error {
 	if key != "" && d.dbFile != "" {
 		enc, encErr := isEncryptedFile(ctx, d.dbFile)
 		if encErr != nil {
-			return encErr
+			return fmt.Errorf("rekey verify: %w", encErr)
 		}
 		if !enc {
 			return fmt.Errorf("rekey did not encrypt database")
@@ -358,7 +373,7 @@ func (d *Database) EncryptDatabase(ctx context.Context, key string) error {
 		return ErrSQLCipherUnavailable
 	}
 	if err := d.DB.Close(); err != nil {
-		return err
+		return fmt.Errorf("encrypt close db: %w", err)
 	}
 
 	tempPath := d.dbFile + ".enc"
@@ -373,7 +388,7 @@ func (d *Database) EncryptDatabase(ctx context.Context, key string) error {
 	// Open plaintext DB without a key.
 	plainDB, err := sql.Open("sqlite3", d.dbFile)
 	if err != nil {
-		return err
+		return fmt.Errorf("encrypt open plaintext: %w", err)
 	}
 
 	if err := plainDB.PingContext(ctx); err != nil {
@@ -455,7 +470,7 @@ func (d *Database) EncryptDatabase(ctx context.Context, key string) error {
 func (d *Database) reopenEncrypted(ctx context.Context, key string) error {
 	db, err := d.openDB(ctx, d.dbFile, key)
 	if err != nil {
-		return err
+		return fmt.Errorf("reopen open db: %w", err)
 	}
 	d.DB = db
 	d.cipherAvailable, d.cipherVersion = d.detectSQLCipher(ctx)
@@ -463,10 +478,10 @@ func (d *Database) reopenEncrypted(ctx context.Context, key string) error {
 		d.cipherAvailable = true
 	}
 	if err := d.verifyDB(ctx, key); err != nil {
-		return err
+		return fmt.Errorf("reopen verify db: %w", err)
 	}
 	if err := d.createTables(ctx); err != nil {
-		return err
+		return fmt.Errorf("reopen create tables: %w", err)
 	}
 	return nil
 }
@@ -484,7 +499,7 @@ func (d *Database) openDB(ctx context.Context, filepath, key string) (*sql.DB, e
 	}
 	db, err := sql.Open("sqlite3", dsn)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("open db: %w", err)
 	}
 	db.SetMaxOpenConns(1)
 	db.SetMaxIdleConns(1)
@@ -499,7 +514,7 @@ func (d *Database) openDB(ctx context.Context, filepath, key string) (*sql.DB, e
 			}
 			return nil, ErrWrongPassphrase
 		}
-		return nil, err
+		return nil, fmt.Errorf("ping db: %w", err)
 	}
 	return db, nil
 }
@@ -539,7 +554,7 @@ func (d *Database) verifyDB(ctx context.Context, key string) error {
 		}
 		return ErrWrongPassphrase
 	}
-	return err
+	return fmt.Errorf("verify db: %w", err)
 }
 
 func (d *Database) detectSQLCipher(ctx context.Context) (bool, string) {
@@ -668,7 +683,7 @@ func (d *Database) RecreateEncryptedDatabase(ctx context.Context, key string) er
 	}()
 	logCleanupError("cleanup backup db", os.Remove(backupPath))
 	if err := d.DB.Close(); err != nil {
-		return err
+		return fmt.Errorf("recreate close db: %w", err)
 	}
 	if err := os.Rename(d.dbFile, backupPath); err != nil {
 		return fmt.Errorf("backup rename failed: %w", err)
@@ -688,11 +703,14 @@ func (d *Database) ClearDatabase(ctx context.Context) error {
 	}
 	if d.DB != nil {
 		if err := d.DB.Close(); err != nil {
-			return err
+			return fmt.Errorf("clear close db: %w", err)
 		}
 	}
 	logCleanupError("cleanup db", os.Remove(d.dbFile))
 	logCleanupError("cleanup backup db", os.Remove(d.dbFile+".bak"))
 	logCleanupError("cleanup encrypted db", os.Remove(d.dbFile+".enc"))
-	return d.reopenEncrypted(ctx, "")
+	if err := d.reopenEncrypted(ctx, ""); err != nil {
+		return fmt.Errorf("clear reopen db: %w", err)
+	}
+	return nil
 }

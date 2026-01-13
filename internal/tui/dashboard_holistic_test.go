@@ -53,11 +53,11 @@ func TestDashboardTagFlow(t *testing.T) {
 	if backlogIdx == -1 {
 		t.Fatalf("expected backlog column")
 	}
-	m.focusedColIdx = backlogIdx
+	m.view.focusedColIdx = backlogIdx
 
 	model, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'t'}})
 	m, _ = model.(DashboardModel)
-	if !m.tagging {
+	if !m.modal.tagging {
 		t.Fatalf("expected tagging to be true")
 	}
 
@@ -91,15 +91,15 @@ func TestDashboardDependencyFlow(t *testing.T) {
 	if backlogIdx == -1 {
 		t.Fatalf("expected backlog column")
 	}
-	m.focusedColIdx = backlogIdx
-	m.focusedGoalIdx = 0
+	m.view.focusedColIdx = backlogIdx
+	m.view.focusedGoalIdx = 0
 
 	model, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'D'}})
 	m, _ = model.(DashboardModel)
-	if !m.depPicking {
+	if !m.modal.depPicking {
 		t.Fatalf("expected dep picking to be true")
 	}
-	if len(m.depOptions) == 0 {
+	if len(m.modal.depOptions) == 0 {
 		t.Fatalf("expected dependency options")
 	}
 
@@ -134,11 +134,11 @@ func TestDashboardRecurrenceFlow(t *testing.T) {
 	if backlogIdx == -1 {
 		t.Fatalf("expected backlog column")
 	}
-	m.focusedColIdx = backlogIdx
+	m.view.focusedColIdx = backlogIdx
 
 	model, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'R'}})
 	m, _ = model.(DashboardModel)
-	if !m.settingRecurrence {
+	if !m.modal.settingRecurrence {
 		t.Fatalf("expected recurrence modal to be active")
 	}
 
@@ -163,14 +163,14 @@ func TestDashboardJournalFlow(t *testing.T) {
 
 	model, _ := m.Update(tea.KeyMsg{Type: tea.KeyCtrlJ})
 	m, _ = model.(DashboardModel)
-	if !m.journaling {
+	if !m.modal.journaling {
 		t.Fatalf("expected journaling to be true")
 	}
 
-	m.journalInput.SetValue("Journal entry")
+	m.inputs.journalInput.SetValue("Journal entry")
 	model, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m, _ = model.(DashboardModel)
-	if m.journaling {
+	if m.modal.journaling {
 		t.Fatalf("expected journaling to end")
 	}
 
@@ -190,7 +190,7 @@ func TestDashboardStartSprintFlow(t *testing.T) {
 	if sprintIdx == -1 {
 		t.Fatalf("expected sprint #1")
 	}
-	m.focusedColIdx = sprintIdx
+	m.view.focusedColIdx = sprintIdx
 	m.timer.ActiveSprint = nil
 
 	model, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})

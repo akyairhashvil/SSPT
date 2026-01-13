@@ -6,25 +6,25 @@ func (m DashboardModel) handleTabFocus(key string) (DashboardModel, bool) {
 	switch key {
 	case "tab", "right", "l":
 		nextIdx := -1
-		for i := m.focusedColIdx + 1; i < len(m.sprints); i++ {
+		for i := m.view.focusedColIdx + 1; i < len(m.sprints); i++ {
 			if m.sprints[i].Status != models.StatusCompleted || i < 2 {
 				nextIdx = i
 				break
 			}
 		}
 		if nextIdx != -1 {
-			m.focusedColIdx, m.focusedGoalIdx = nextIdx, 0
-			if m.focusedColIdx >= 2 {
-				m.colScrollOffset++
+			m.view.focusedColIdx, m.view.focusedGoalIdx = nextIdx, 0
+			if m.view.focusedColIdx >= 2 {
+				m.view.colScrollOffset++
 			}
 		}
 		return m, true
 	case "shift+tab", "left", "h":
-		if m.focusedColIdx > 0 {
-			m.focusedColIdx--
-			m.focusedGoalIdx = 0
-			if m.colScrollOffset > 0 {
-				m.colScrollOffset--
+		if m.view.focusedColIdx > 0 {
+			m.view.focusedColIdx--
+			m.view.focusedGoalIdx = 0
+			if m.view.colScrollOffset > 0 {
+				m.view.colScrollOffset--
 			}
 		}
 		return m, true
@@ -35,13 +35,13 @@ func (m DashboardModel) handleTabFocus(key string) (DashboardModel, bool) {
 func (m DashboardModel) handleArrowKeys(key string) (DashboardModel, bool) {
 	switch key {
 	case "up", "k":
-		if m.focusedGoalIdx > 0 {
-			m.focusedGoalIdx--
+		if m.view.focusedGoalIdx > 0 {
+			m.view.focusedGoalIdx--
 		}
 		return m, true
 	case "down", "j":
-		if m.validSprintIndex(m.focusedColIdx) && m.focusedGoalIdx < len(m.sprints[m.focusedColIdx].Goals)-1 {
-			m.focusedGoalIdx++
+		if m.validSprintIndex(m.view.focusedColIdx) && m.view.focusedGoalIdx < len(m.sprints[m.view.focusedColIdx].Goals)-1 {
+			m.view.focusedGoalIdx++
 		}
 		return m, true
 	}
@@ -54,6 +54,6 @@ func (m DashboardModel) handleScrolling(key string) (DashboardModel, bool) {
 	}
 	m.showAnalytics = !m.showAnalytics
 	m.search.Active = false
-	m.journaling = false
+	m.modal.journaling = false
 	return m, true
 }

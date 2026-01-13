@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/akyairhashvil/SSPT/internal/config"
 	"github.com/akyairhashvil/SSPT/internal/database"
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -36,20 +37,20 @@ func setupIntegrationDashboard(t *testing.T) (DashboardModel, *database.Database
 	}
 
 	m := NewDashboardModel(ctx, db, dayID)
-	m.lock.Locked = false
+	m.security.lock.Locked = false
 	return m, db
 }
 
 func TestDashboardCreateGoalFlow(t *testing.T) {
 	m, db := setupIntegrationDashboard(t)
-	m.focusedColIdx = 1
+	m.view.focusedColIdx = config.DefaultFocusColumn
 
 	model, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
 	m, _ = model.(DashboardModel)
-	if !m.creatingGoal {
+	if !m.modal.creatingGoal {
 		t.Fatalf("expected creatingGoal to be true")
 	}
-	m.textInput.SetValue("Test Goal")
+	m.inputs.textInput.SetValue("Test Goal")
 	model, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m, _ = model.(DashboardModel)
 
