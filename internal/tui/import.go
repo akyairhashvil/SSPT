@@ -2,6 +2,7 @@ package tui
 
 import (
 	"bufio"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -60,7 +61,7 @@ func EnsureSeedFile() (string, error) {
 	return txtPath, nil
 }
 
-func ImportSeed(db *database.Database, path string, workspaceID int64, dayID int64) (int, string, int, error) {
+func ImportSeed(ctx context.Context, db Database, path string, workspaceID int64, dayID int64) (int, string, int, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return 0, "", 0, err
@@ -69,14 +70,14 @@ func ImportSeed(db *database.Database, path string, workspaceID int64, dayID int
 	hash := hex.EncodeToString(sum[:])
 
 	if isJSONSeed(data) {
-		imported, backlogFallback, err := importSeedJSON(db, data, workspaceID, dayID)
+		imported, backlogFallback, err := importSeedJSON(ctx, db, data, workspaceID, dayID)
 		if err != nil {
 			return imported, "", backlogFallback, err
 		}
 		return imported, hash, backlogFallback, nil
 	}
 
-	imported, backlogFallback, err := importSeedDSL(db, data, workspaceID, dayID)
+	imported, backlogFallback, err := importSeedDSL(ctx, db, data, workspaceID, dayID)
 	if err != nil {
 		return imported, "", backlogFallback, err
 	}
@@ -93,12 +94,12 @@ func isJSONSeed(data []byte) bool {
 	return false
 }
 
-func importSeedJSON(db *database.Database, data []byte, workspaceID int64, dayID int64) (int, int, error) {
+func importSeedJSON(ctx context.Context, db Database, data []byte, workspaceID int64, dayID int64) (int, int, error) {
 	var cfg seedConfig
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		return 0, 0, fmt.Errorf("invalid seed file: %w", err)
 	}
-	sprints, err := db.GetSprints(dayID, workspaceID)
+	sprints, err := db.GetSprints(ctx, dayID, workspaceID)
 	if err != nil {
 		return 0, 0, err
 	}
@@ -112,12 +113,12 @@ func importSeedJSON(db *database.Database, data []byte, workspaceID int64, dayID
 		if strings.TrimSpace(task.Description) == "" {
 			continue
 		}
-		exists, err := db.GoalExistsDetailed(workspaceID, 0, nil, task)
+		exists, err := db.GoalExistsDetailed(ctx, workspaceID, 0, nil, task)
 		if err != nil {
 			return imported, backlogFallback, err
 		}
 		if !exists {
-			if err := db.AddGoalDetailed(workspaceID, 0, task); err != nil {
+			if err := db.AddGoalDetailed(ctx, workspaceID, 0, task); err != nil {
 				return imported, backlogFallback, err
 			}
 			imported++
@@ -127,7 +128,7 @@ func importSeedJSON(db *database.Database, data []byte, workspaceID int64, dayID
 		targetID, ok := sprintIDs[sprint.Number]
 		if !ok {
 			for {
-				if err := db.AppendSprint(dayID, workspaceID); err != nil {
+				if err := db.AppendSprint(ctx, dayID, workspaceID); err != nil {
 					if isMaxSprintErr(err) {
 						targetID = 0
 						backlogFallback++
@@ -135,7 +136,7 @@ func importSeedJSON(db *database.Database, data []byte, workspaceID int64, dayID
 					}
 					return imported, backlogFallback, err
 				}
-				sprints, err := db.GetSprints(dayID, workspaceID)
+				sprints, err := db.GetSprints(ctx, dayID, workspaceID)
 				if err != nil {
 					return imported, backlogFallback, err
 				}
@@ -152,12 +153,12 @@ func importSeedJSON(db *database.Database, data []byte, workspaceID int64, dayID
 			if strings.TrimSpace(task.Description) == "" {
 				continue
 			}
-			exists, err := db.GoalExistsDetailed(workspaceID, targetID, nil, task)
+			exists, err := db.GoalExistsDetailed(ctx, workspaceID, targetID, nil, task)
 			if err != nil {
 				return imported, backlogFallback, err
 			}
 			if !exists {
-				if err := db.AddGoalDetailed(workspaceID, targetID, task); err != nil {
+				if err := db.AddGoalDetailed(ctx, workspaceID, targetID, task); err != nil {
 					return imported, backlogFallback, err
 				}
 				imported++
@@ -167,12 +168,12 @@ func importSeedJSON(db *database.Database, data []byte, workspaceID int64, dayID
 	return imported, backlogFallback, nil
 }
 
-func importSeedDSL(db *database.Database, data []byte, defaultWorkspaceID int64, dayID int64) (int, int, error) {
+func importSeedDSL(ctx context.Context, db Database, data []byte, defaultWorkspaceID int64, dayID int64) (int, int, error) {
 	sprintsByWorkspace := make(map[int64]map[int]int64)
 	backlogFallback := 0
 	getSprintID := func(workspaceID int64, number int) (int64, bool, error) {
 		if sprintsByWorkspace[workspaceID] == nil {
-			sprints, err := db.GetSprints(dayID, workspaceID)
+			sprints, err := db.GetSprints(ctx, dayID, workspaceID)
 			if err != nil {
 				return 0, false, err
 			}
@@ -185,14 +186,14 @@ func importSeedDSL(db *database.Database, data []byte, defaultWorkspaceID int64,
 			return id, true, nil
 		}
 		for {
-			if err := db.AppendSprint(dayID, workspaceID); err != nil {
+			if err := db.AppendSprint(ctx, dayID, workspaceID); err != nil {
 				if isMaxSprintErr(err) {
 					backlogFallback++
 					return 0, true, nil
 				}
 				return 0, false, err
 			}
-			sprints, err := db.GetSprints(dayID, workspaceID)
+			sprints, err := db.GetSprints(ctx, dayID, workspaceID)
 			if err != nil {
 				return 0, false, err
 			}
@@ -222,7 +223,7 @@ func importSeedDSL(db *database.Database, data []byte, defaultWorkspaceID int64,
 			if name == "" {
 				return imported, backlogFallback, fmt.Errorf("workspace name required")
 			}
-			wsID, err := ensureWorkspaceByName(db, name)
+			wsID, err := ensureWorkspaceByName(ctx, db, name)
 			if err != nil {
 				return imported, backlogFallback, err
 			}
@@ -252,17 +253,17 @@ func importSeedDSL(db *database.Database, data []byte, defaultWorkspaceID int64,
 				}
 				targetID = id
 			}
-			exists, err := db.GoalExistsDetailed(currentWorkspaceID, targetID, nil, task)
+			exists, err := db.GoalExistsDetailed(ctx, currentWorkspaceID, targetID, nil, task)
 			if err != nil {
 				return imported, backlogFallback, err
 			}
 			if !exists {
-				if err := db.AddGoalDetailed(currentWorkspaceID, targetID, task); err != nil {
+				if err := db.AddGoalDetailed(ctx, currentWorkspaceID, targetID, task); err != nil {
 					return imported, backlogFallback, err
 				}
 				imported++
 			}
-			lastGoalID = getLastGoalID(db)
+			lastGoalID = getLastGoalID(ctx, db)
 		case '-':
 			task, err := parseSeedTask(strings.TrimSpace(strings.TrimPrefix(line, "-")))
 			if err != nil {
@@ -274,12 +275,12 @@ func importSeedDSL(db *database.Database, data []byte, defaultWorkspaceID int64,
 			if lastGoalID == 0 {
 				return imported, backlogFallback, fmt.Errorf("subtask without parent: %q", line)
 			}
-			exists, err := db.GoalExistsDetailed(currentWorkspaceID, 0, &lastGoalID, task)
+			exists, err := db.GoalExistsDetailed(ctx, currentWorkspaceID, 0, &lastGoalID, task)
 			if err != nil {
 				return imported, backlogFallback, err
 			}
 			if !exists {
-				if err := db.AddSubtaskDetailed(lastGoalID, task); err != nil {
+				if err := db.AddSubtaskDetailed(ctx, lastGoalID, task); err != nil {
 					return imported, backlogFallback, err
 				}
 				imported++
@@ -345,14 +346,14 @@ func parseSprintNumber(line string) (int, bool) {
 	return 0, false
 }
 
-func ensureWorkspaceByName(db *database.Database, name string) (int64, error) {
+func ensureWorkspaceByName(ctx context.Context, db Database, name string) (int64, error) {
 	slug := slugify(name)
-	if id, ok, err := db.GetWorkspaceIDBySlug(slug); err != nil {
+	if id, ok, err := db.GetWorkspaceIDBySlug(ctx, slug); err != nil {
 		return 0, err
 	} else if ok {
 		return id, nil
 	}
-	return db.CreateWorkspace(name, slug)
+	return db.CreateWorkspace(ctx, name, slug)
 }
 
 func slugify(name string) string {
@@ -362,9 +363,9 @@ func slugify(name string) string {
 	return s
 }
 
-func getLastGoalID(db *database.Database) int64 {
-	var id int64
-	if err := db.DB.QueryRow("SELECT id FROM goals ORDER BY id DESC LIMIT 1").Scan(&id); err != nil {
+func getLastGoalID(ctx context.Context, db Database) int64 {
+	id, err := db.GetLastGoalID(ctx)
+	if err != nil {
 		return 0
 	}
 	return id

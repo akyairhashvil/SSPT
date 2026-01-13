@@ -1,6 +1,12 @@
+// Package tui implements the terminal user interface for SSPT using
+// the Bubble Tea framework (Elm architecture: Model-View-Update).
+//
+// The main entry point is DashboardModel which manages application state
+// and handles keyboard input, timer updates, and screen rendering.
 package tui
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"sort"
@@ -9,22 +15,19 @@ import (
 	"time"
 
 	"github.com/akyairhashvil/SSPT/internal/config"
-	"github.com/akyairhashvil/SSPT/internal/database"
 	"github.com/akyairhashvil/SSPT/internal/models"
 	"github.com/charmbracelet/bubbles/progress"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 )
 
-const (
-	SprintDuration        = config.SprintDuration
-	BreakDuration         = config.BreakDuration
-	AutoLockAfter         = config.AutoLockAfter
-	passphraseMaxAttempts = config.MaxPassphraseAttempts
-	passphraseLockout     = 30 * time.Second
-)
+const passphraseLockout = 30 * time.Second
 
-var AppVersion = "0"
+var (
+	AppVersion = "dev"
+	GitCommit  = "unknown"
+	BuildTime  = "unknown"
+)
 
 // View Modes
 const (
@@ -35,7 +38,8 @@ const (
 
 // --- Model ---
 type DashboardModel struct {
-	db                   *database.Database
+	db                   Database
+	ctx                  context.Context
 	day                  models.Day
 	sprints              []SprintView
 	workspaces           []models.Workspace
@@ -110,8 +114,11 @@ type depOption struct {
 	Label string
 }
 
-func NewDashboardModel(db *database.Database, dayID int64) DashboardModel {
-	_, wsErr := db.EnsureDefaultWorkspace()
+func NewDashboardModel(ctx context.Context, db Database, dayID int64) DashboardModel {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	_, wsErr := db.EnsureDefaultWorkspace(ctx)
 	ti := textinput.New()
 	ti.Placeholder = "New Objective..."
 	ti.CharLimit = 100
@@ -142,11 +149,12 @@ func NewDashboardModel(db *database.Database, dayID int64) DashboardModel {
 	passConfirm.EchoMode = textinput.EchoPassword
 	passConfirm.Width = 30
 
-	lock := NewLockModel(AutoLockAfter, passInput)
+	lock := NewLockModel(config.AutoLockAfter, passInput)
 	search := NewSearchModel(si)
 
 	m := DashboardModel{
 		db:                 db,
+		ctx:                ctx,
 		textInput:          ti,
 		journalInput:       ji,
 		tagInput:           tagInput,
@@ -178,7 +186,7 @@ func NewDashboardModel(db *database.Database, dayID int64) DashboardModel {
 	} else if err := m.loadWorkspaces(); err != nil {
 		m.setStatusError(fmt.Sprintf("Error loading workspaces: %v", err))
 	}
-	if hash, ok := m.db.GetSetting("passphrase_hash"); ok && hash != "" {
+	if hash, ok := m.db.GetSetting(ctx, "passphrase_hash"); ok && hash != "" {
 		m.lock.PassphraseHash = hash
 		m.lock.Locked = true
 		m.lock.Message = "Enter passphrase to unlock"
@@ -198,13 +206,32 @@ func NewDashboardModel(db *database.Database, dayID int64) DashboardModel {
 	// Set initial focus
 	if len(m.sprints) > 1 {
 		for i := 1; i < len(m.sprints); i++ {
-			if m.sprints[i].Status != "completed" && m.sprints[i].SprintNumber > 0 {
+			if m.sprints[i].Status != models.StatusCompleted && m.sprints[i].SprintNumber > 0 {
 				m.focusedColIdx = i
 				break
 			}
 		}
 	}
 	return m
+}
+
+func (m DashboardModel) hasActiveSprint() bool {
+	return m.timer.ActiveSprint != nil
+}
+
+func (m DashboardModel) validSprintIndex(idx int) bool {
+	return idx >= 0 && idx < len(m.sprints)
+}
+
+func (m DashboardModel) currentSprint() *SprintView {
+	if !m.validSprintIndex(m.focusedColIdx) {
+		return nil
+	}
+	return &m.sprints[m.focusedColIdx]
+}
+
+func (m DashboardModel) canModifyGoals() bool {
+	return !m.lock.Locked && !m.inInputMode()
 }
 
 func (m *DashboardModel) setStatusError(message string) {
@@ -230,7 +257,7 @@ func (m *DashboardModel) passphraseRateLimited() (bool, time.Duration) {
 
 func (m *DashboardModel) recordPassphraseFailure() {
 	m.lock.Attempts++
-	if m.lock.Attempts >= passphraseMaxAttempts {
+	if m.lock.Attempts >= config.MaxPassphraseAttempts {
 		m.lock.Attempts = 0
 		m.lock.LockUntil = time.Now().Add(passphraseLockout)
 	}
@@ -274,7 +301,7 @@ func cloneGoals(goals []GoalView) []GoalView {
 }
 
 func (m *DashboardModel) loadWorkspaces() error {
-	workspaces, err := m.db.GetWorkspaces()
+	workspaces, err := m.db.GetWorkspaces(m.ctx)
 	if err != nil {
 		return err
 	}
@@ -297,27 +324,27 @@ func (m *DashboardModel) refreshData(dayID int64) {
 	activeWS := m.workspaces[m.activeWorkspaceIdx]
 	m.viewMode = activeWS.ViewMode
 	SetTheme(activeWS.Theme)
-	blockedIDs, err := m.db.GetBlockedGoalIDs(activeWS.ID)
+	blockedIDs, err := m.db.GetBlockedGoalIDs(m.ctx, activeWS.ID)
 	if err != nil {
 		m.setStatusError(fmt.Sprintf("Error loading blocked goals: %v", err))
 		return
 	}
 	m.timer.ActiveTask = nil
-	if task, err := m.db.GetActiveTask(activeWS.ID); err == nil {
+	if task, err := m.db.GetActiveTask(m.ctx, activeWS.ID); err == nil {
 		m.timer.ActiveTask = task
 	}
 
-	day, err := m.db.GetDay(dayID)
+	day, err := m.db.GetDay(m.ctx, dayID)
 	if err != nil {
 		m.setStatusError(fmt.Sprintf("Error loading day: %v", err))
 		return
 	}
-	rawSprints, err := m.db.GetSprints(dayID, activeWS.ID)
+	rawSprints, err := m.db.GetSprints(m.ctx, dayID, activeWS.ID)
 	if err != nil {
 		m.setStatusError(fmt.Sprintf("Error loading sprints: %v", err))
 		return
 	}
-	journalEntries, err := m.db.GetJournalEntries(dayID, activeWS.ID)
+	journalEntries, err := m.db.GetJournalEntries(m.ctx, dayID, activeWS.ID)
 	if err != nil {
 		m.setStatusError(fmt.Sprintf("Error loading journal entries: %v", err))
 		return
@@ -329,7 +356,7 @@ func (m *DashboardModel) refreshData(dayID int64) {
 	if activeWS.ShowArchived {
 		archivedKey := fmt.Sprintf("archived:%d", activeWS.ID)
 		archivedGoals, err := m.getGoalTree(archivedKey, func() ([]models.Goal, error) {
-			return m.db.GetArchivedGoals(activeWS.ID)
+			return m.db.GetArchivedGoals(m.ctx, activeWS.ID)
 		})
 		if err != nil {
 			m.setStatusError(fmt.Sprintf("Error loading archived goals: %v", err))
@@ -343,7 +370,7 @@ func (m *DashboardModel) refreshData(dayID int64) {
 	if activeWS.ShowCompleted {
 		completedKey := fmt.Sprintf("completed:%d:%d", activeWS.ID, dayID)
 		completedGoals, err := m.getGoalTree(completedKey, func() ([]models.Goal, error) {
-			return m.db.GetCompletedGoalsForDay(dayID, activeWS.ID)
+			return m.db.GetCompletedGoalsForDay(m.ctx, dayID, activeWS.ID)
 		})
 		if err != nil {
 			m.setStatusError(fmt.Sprintf("Error loading completed goals: %v", err))
@@ -357,7 +384,7 @@ func (m *DashboardModel) refreshData(dayID int64) {
 	pruneCompleted = func(goals []GoalView) []GoalView {
 		var out []GoalView
 		for _, g := range goals {
-			if g.Status != "completed" {
+			if g.Status != models.GoalStatusCompleted {
 				g.Subtasks = pruneCompleted(g.Subtasks)
 				out = append(out, g)
 			}
@@ -394,7 +421,7 @@ func (m *DashboardModel) refreshData(dayID int64) {
 	if activeWS.ShowBacklog {
 		backlogKey := fmt.Sprintf("backlog:%d", activeWS.ID)
 		backlogGoals, err := m.getGoalTree(backlogKey, func() ([]models.Goal, error) {
-			return m.db.GetBacklogGoals(activeWS.ID)
+			return m.db.GetBacklogGoals(m.ctx, activeWS.ID)
 		})
 		if err != nil {
 			m.setStatusError(fmt.Sprintf("Error loading backlog goals: %v", err))
@@ -409,7 +436,7 @@ func (m *DashboardModel) refreshData(dayID int64) {
 	for i := range rawSprints {
 		sprintKey := fmt.Sprintf("sprint:%d", rawSprints[i].ID)
 		goals, err := m.getGoalTree(sprintKey, func() ([]models.Goal, error) {
-			return m.db.GetGoalsForSprint(rawSprints[i].ID)
+			return m.db.GetGoalsForSprint(m.ctx, rawSprints[i].ID)
 		})
 		if err != nil {
 			m.setStatusError(fmt.Sprintf("Error loading sprint goals: %v", err))
@@ -424,7 +451,7 @@ func (m *DashboardModel) refreshData(dayID int64) {
 	m.day, m.journalEntries = day, journalEntries
 	m.timer.ActiveSprint = nil
 	for i := range m.sprints {
-		if m.sprints[i].Status == "active" {
+		if m.sprints[i].Status == models.StatusActive {
 			m.timer.ActiveSprint = &m.sprints[i]
 			break
 		}

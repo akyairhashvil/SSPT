@@ -9,9 +9,10 @@ func TestValidatePassphrase(t *testing.T) {
 		valid bool
 	}{
 		{"too short", "abc12", false},
-		{"no digit", "password", false},
-		{"no letter", "12345678", false},
-		{"valid", "pass1234", true},
+		{"no digit", "Password", false},
+		{"no upper", "password1", false},
+		{"no lower", "PASSWORD1", false},
+		{"valid", "Pass1234", true},
 	}
 	for _, tc := range cases {
 		tc := tc

@@ -1,21 +1,22 @@
 package tui
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
 
-	"github.com/akyairhashvil/SSPT/internal/database"
+	"github.com/akyairhashvil/SSPT/internal/models"
 	"github.com/akyairhashvil/SSPT/internal/util"
 	"github.com/go-pdf/fpdf"
 )
 
-func GeneratePDFReport(db *database.Database, dayID int64, workspaceID int64) (string, error) {
-	day, err := db.GetDay(dayID)
+func GeneratePDFReport(ctx context.Context, db Database, dayID int64, workspaceID int64) (string, error) {
+	day, err := db.GetDay(ctx, dayID)
 	if err != nil {
 		return "", err
 	}
-	sprints, err := db.GetSprints(dayID, workspaceID)
+	sprints, err := db.GetSprints(ctx, dayID, workspaceID)
 	if err != nil {
 		return "", err
 	}
@@ -31,7 +32,7 @@ func GeneratePDFReport(db *database.Database, dayID int64, workspaceID int64) (s
 	totalCompleted := 0
 
 	// Fetch ALL goals to build complete context
-	allGoals, err := db.GetAllGoals()
+	allGoals, err := db.GetAllGoals(ctx)
 	if err != nil {
 		return "", err
 	}
@@ -74,10 +75,10 @@ func GeneratePDFReport(db *database.Database, dayID int64, workspaceID int64) (s
 		// Header
 		pdf.SetFont("Arial", "B", 14)
 		header := fmt.Sprintf("Sprint %d", s.SprintNumber)
-		if s.Status == "completed" {
+		if s.Status == models.StatusCompleted {
 			header += " (Completed)"
 		} else {
-			header += " (" + s.Status + ")"
+			header += " (" + string(s.Status) + ")"
 		}
 		pdf.Cell(0, 10, header)
 		pdf.Ln(8)
@@ -91,7 +92,7 @@ func GeneratePDFReport(db *database.Database, dayID int64, workspaceID int64) (s
 
 		for _, g := range flatGoals {
 			status := "[ ]"
-			if g.Status == "completed" {
+			if g.Status == models.GoalStatusCompleted {
 				status = "[x]"
 				totalCompleted++
 			}
@@ -112,7 +113,7 @@ func GeneratePDFReport(db *database.Database, dayID int64, workspaceID int64) (s
 	pdf.Ln(10)
 
 	// Journaling
-	entries, err := db.GetJournalEntries(dayID, workspaceID)
+	entries, err := db.GetJournalEntries(ctx, dayID, workspaceID)
 	if err != nil {
 		return "", err
 	}

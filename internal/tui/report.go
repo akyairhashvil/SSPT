@@ -1,21 +1,22 @@
 package tui
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
 
-	"github.com/akyairhashvil/SSPT/internal/database"
+	"github.com/akyairhashvil/SSPT/internal/models"
 	"github.com/akyairhashvil/SSPT/internal/util"
 )
 
 // GenerateReport creates a markdown summary of the day's activity.
-func GenerateReport(db *database.Database, dayID int64, workspaceID int64) (string, error) {
-	day, err := db.GetDay(dayID)
+func GenerateReport(ctx context.Context, db Database, dayID int64, workspaceID int64) (string, error) {
+	day, err := db.GetDay(ctx, dayID)
 	if err != nil {
 		return "", err
 	}
-	sprints, err := db.GetSprints(dayID, workspaceID)
+	sprints, err := db.GetSprints(ctx, dayID, workspaceID)
 	if err != nil {
 		return "", err
 	}
@@ -54,7 +55,7 @@ func GenerateReport(db *database.Database, dayID int64, workspaceID int64) (stri
 	totalGoals := 0
 
 	// Fetch ALL goals to build complete context
-	allGoals, err := db.GetAllGoals()
+	allGoals, err := db.GetAllGoals(ctx)
 	if err != nil {
 		return "", err
 	}
@@ -119,7 +120,7 @@ func GenerateReport(db *database.Database, dayID int64, workspaceID int64) (stri
 		for _, g := range flatGoals {
 			totalGoals++
 			check := "[ ]"
-			if g.Status == "completed" {
+			if g.Status == models.GoalStatusCompleted {
 				check = "[x]"
 				totalCompleted++
 			}
@@ -162,7 +163,7 @@ func GenerateReport(db *database.Database, dayID int64, workspaceID int64) (stri
 	}
 
 	// Journal
-	entries, err := db.GetJournalEntries(dayID, workspaceID)
+	entries, err := db.GetJournalEntries(ctx, dayID, workspaceID)
 	if err != nil {
 		return "", err
 	}

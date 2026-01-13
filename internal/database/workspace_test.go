@@ -1,25 +1,29 @@
 package database
 
-import "testing"
+import (
+	"context"
+	"testing"
+)
 
 func TestWorkspaceUpdates(t *testing.T) {
-	db := setupTestDB(t)
-	wsID, err := db.CreateWorkspace("Work", "work")
+	ctx := context.Background()
+	db := setupTestDB(t, ctx)
+	wsID, err := db.CreateWorkspace(ctx, "Work", "work")
 	if err != nil {
 		t.Fatalf("CreateWorkspace failed: %v", err)
 	}
 
-	if err := db.UpdateWorkspaceTheme(wsID, "solarized"); err != nil {
+	if err := db.UpdateWorkspaceTheme(ctx, wsID, "solarized"); err != nil {
 		t.Fatalf("UpdateWorkspaceTheme failed: %v", err)
 	}
-	if err := db.UpdateWorkspaceViewMode(wsID, 2); err != nil {
+	if err := db.UpdateWorkspaceViewMode(ctx, wsID, 2); err != nil {
 		t.Fatalf("UpdateWorkspaceViewMode failed: %v", err)
 	}
-	if err := db.UpdateWorkspacePaneVisibility(wsID, true, false, true); err != nil {
+	if err := db.UpdateWorkspacePaneVisibility(ctx, wsID, true, false, true); err != nil {
 		t.Fatalf("UpdateWorkspacePaneVisibility failed: %v", err)
 	}
 
-	workspaces, err := db.GetWorkspaces()
+	workspaces, err := db.GetWorkspaces(ctx)
 	if err != nil {
 		t.Fatalf("GetWorkspaces failed: %v", err)
 	}

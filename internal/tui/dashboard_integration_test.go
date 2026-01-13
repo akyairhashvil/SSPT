@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"context"
 	"path/filepath"
 	"testing"
 
@@ -10,9 +11,10 @@ import (
 
 func setupIntegrationDashboard(t *testing.T) (DashboardModel, *database.Database) {
 	t.Helper()
+	ctx := context.Background()
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "test.db")
-	db, err := database.Open(dbPath, "")
+	db, err := database.Open(ctx, dbPath, "")
 	if err != nil {
 		t.Fatalf("Open failed: %v", err)
 	}
@@ -21,19 +23,19 @@ func setupIntegrationDashboard(t *testing.T) (DashboardModel, *database.Database
 			t.Logf("db close failed: %v", err)
 		}
 	})
-	wsID, err := db.EnsureDefaultWorkspace()
+	wsID, err := db.EnsureDefaultWorkspace(ctx)
 	if err != nil {
 		t.Fatalf("EnsureDefaultWorkspace failed: %v", err)
 	}
-	if err := db.BootstrapDay(wsID, 1); err != nil {
+	if err := db.BootstrapDay(ctx, wsID, 1); err != nil {
 		t.Fatalf("BootstrapDay failed: %v", err)
 	}
-	dayID := db.CheckCurrentDay()
+	dayID := db.CheckCurrentDay(ctx)
 	if dayID == 0 {
 		t.Fatalf("CheckCurrentDay returned zero ID")
 	}
 
-	m := NewDashboardModel(db, dayID)
+	m := NewDashboardModel(ctx, db, dayID)
 	m.lock.Locked = false
 	return m, db
 }
@@ -52,7 +54,7 @@ func TestDashboardCreateGoalFlow(t *testing.T) {
 	m, _ = model.(DashboardModel)
 
 	wsID := m.workspaces[m.activeWorkspaceIdx].ID
-	goals, err := db.GetBacklogGoals(wsID)
+	goals, err := db.GetBacklogGoals(m.ctx, wsID)
 	if err != nil {
 		t.Fatalf("GetBacklogGoals failed: %v", err)
 	}

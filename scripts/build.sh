@@ -15,6 +15,8 @@ fi
 
 num=$((num + 1))
 echo "$num" > "$build_file"
+commit="$(git rev-parse --short HEAD)"
+build_time="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 
 export GOCACHE="$root_dir/.gocache"
 export GOMODCACHE="$root_dir/.gomodcache"
@@ -32,7 +34,10 @@ if [[ ${#build_tags[@]} -gt 0 ]]; then
   tags_arg=(-tags "$(IFS=,; echo "${build_tags[*]}")")
 fi
 
-go build "${tags_arg[@]}" -ldflags "-X github.com/akyairhashvil/SSPT/internal/tui.AppVersion=$num" \
+go build "${tags_arg[@]}" -ldflags "\
+  -X github.com/akyairhashvil/SSPT/internal/tui.AppVersion=$num \
+  -X github.com/akyairhashvil/SSPT/internal/tui.GitCommit=$commit \
+  -X github.com/akyairhashvil/SSPT/internal/tui.BuildTime=$build_time" \
   -o "$root_dir/sspt" \
   "$root_dir/cmd/app/main.go"
 

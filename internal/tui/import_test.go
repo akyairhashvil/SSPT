@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -9,9 +10,10 @@ import (
 )
 
 func TestImportSeedJSON(t *testing.T) {
+	ctx := context.Background()
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "test.db")
-	db, err := database.Open(dbPath, "")
+	db, err := database.Open(ctx, dbPath, "")
 	if err != nil {
 		t.Fatalf("Open failed: %v", err)
 	}
@@ -21,14 +23,14 @@ func TestImportSeedJSON(t *testing.T) {
 		}
 	})
 
-	wsID, err := db.EnsureDefaultWorkspace()
+	wsID, err := db.EnsureDefaultWorkspace(ctx)
 	if err != nil {
 		t.Fatalf("EnsureDefaultWorkspace failed: %v", err)
 	}
-	if err := db.BootstrapDay(wsID, 1); err != nil {
+	if err := db.BootstrapDay(ctx, wsID, 1); err != nil {
 		t.Fatalf("BootstrapDay failed: %v", err)
 	}
-	dayID := db.CheckCurrentDay()
+	dayID := db.CheckCurrentDay(ctx)
 	if dayID == 0 {
 		t.Fatalf("CheckCurrentDay returned zero ID")
 	}
@@ -48,7 +50,7 @@ func TestImportSeedJSON(t *testing.T) {
 		t.Fatalf("WriteFile failed: %v", err)
 	}
 
-	count, _, backlogFallback, err := ImportSeed(db, seedPath, wsID, dayID)
+	count, _, backlogFallback, err := ImportSeed(ctx, db, seedPath, wsID, dayID)
 	if err != nil {
 		t.Fatalf("ImportSeed failed: %v", err)
 	}

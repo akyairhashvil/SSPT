@@ -7,6 +7,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/akyairhashvil/SSPT/internal/config"
+	"github.com/akyairhashvil/SSPT/internal/models"
 	"github.com/akyairhashvil/SSPT/internal/util"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
@@ -46,7 +48,7 @@ func (m DashboardModel) renderHeader() string {
 
 	if m.timer.BreakActive {
 		elapsed := time.Since(m.timer.BreakStart)
-		rem := BreakDuration - elapsed
+		rem := config.BreakDuration - elapsed
 		if rem < 0 {
 			rem = 0
 		}
@@ -58,12 +60,12 @@ func (m DashboardModel) renderHeader() string {
 			startedAt = *m.timer.ActiveSprint.StartTime
 		}
 		elapsed := time.Since(startedAt) + (time.Duration(m.timer.ActiveSprint.ElapsedSeconds) * time.Second)
-		rem := SprintDuration - elapsed
+		rem := config.SprintDuration - elapsed
 		if rem < 0 {
 			rem = 0
 		}
 		timeStr := fmt.Sprintf("%02d:%02d", int(rem.Minutes()), int(rem.Seconds())%60)
-		barView := m.progress.ViewAs(float64(elapsed) / float64(SprintDuration))
+		barView := m.progress.ViewAs(float64(elapsed) / float64(config.SprintDuration))
 		timerContent = fmt.Sprintf("ACTIVE SPRINT: %d  |  %s  |  %s remaining", m.timer.ActiveSprint.SprintNumber, barView, timeStr)
 		timerColor = CurrentTheme.Focused
 	} else {
@@ -81,9 +83,9 @@ func (m DashboardModel) renderHeader() string {
 
 		if m.focusedColIdx < len(m.sprints) {
 			target := m.sprints[m.focusedColIdx]
-			if target.Status == "paused" {
+			if target.Status == models.StatusPaused {
 				elapsed := time.Duration(target.ElapsedSeconds) * time.Second
-				rem := SprintDuration - elapsed
+				rem := config.SprintDuration - elapsed
 				timeStr := fmt.Sprintf("%02d:%02d", int(rem.Minutes()), int(rem.Seconds())%60)
 				timerContent = fmt.Sprintf("PAUSED SPRINT: %d  |  %s remaining  |  [s] to Resume", target.SprintNumber, timeStr)
 				timerColor = CurrentTheme.Break
@@ -95,7 +97,8 @@ func (m DashboardModel) renderHeader() string {
 		timerContent = "SSPT - Ready"
 		timerColor = CurrentTheme.Dim
 	}
-	cipherOn, encrypted, cipherVer := m.db.EncryptionStatus()
+	encInfo := m.db.EncryptionStatus()
+	cipherOn, encrypted, cipherVer := encInfo.CipherAvailable, encInfo.DatabaseEncrypted, encInfo.CipherVersion
 	dbLabel := "DB: sqlite"
 	cipherLabel := "Cipher: none"
 	if cipherOn {
@@ -113,7 +116,7 @@ func (m DashboardModel) renderHeader() string {
 		dbLabel = "DB: enc"
 	}
 	logo := renderLogo()
-	timerContent = fmt.Sprintf("%s  |  %s  |  %s  |  %s v%s", timerContent, dbLabel, cipherLabel, logo, AppVersion)
+	timerContent = fmt.Sprintf("%s  |  %s  |  %s  |  %s v%s", timerContent, dbLabel, cipherLabel, logo, versionLabel())
 
 	// Render Header (Timer Box)
 	headerFrame := lipgloss.NewStyle().
@@ -295,7 +298,7 @@ func (m DashboardModel) buildBoardLayout() boardLayout {
 	}
 	for i := 0; i < len(m.sprints); i++ {
 		sprint := m.sprints[i]
-		if sprint.Status == "completed" && sprint.SprintNumber > 0 {
+		if sprint.Status == models.StatusCompleted && sprint.SprintNumber > 0 {
 			continue
 		}
 		if sprint.SprintNumber == -1 && (!showCompleted || m.viewMode == ViewModeFocused) {
@@ -313,9 +316,9 @@ func (m DashboardModel) buildBoardLayout() boardLayout {
 		scrollableIndices = append(scrollableIndices, i)
 	}
 
-	displayCount := 4
+	displayCount := config.MaxDisplayColumns
 	if m.viewMode == ViewModeMinimal {
-		displayCount = 3
+		displayCount = config.MinDisplayColumns
 	}
 
 	colFrame := lipgloss.NewStyle().
@@ -396,7 +399,7 @@ func (m DashboardModel) renderBoard(height int, layout boardLayout) string {
 
 			if m.timer.ActiveSprint != nil && sprint.ID == m.timer.ActiveSprint.ID {
 				title = "▶ " + title
-			} else if sprint.Status == "paused" {
+			} else if sprint.Status == models.StatusPaused {
 				title = "⏸ " + title
 			}
 
@@ -505,7 +508,7 @@ func (m DashboardModel) renderBoard(height int, layout boardLayout) string {
 					isFocused := realIdx == m.focusedColIdx && j == m.focusedGoalIdx
 					lead := "  "
 					base := CurrentTheme.Goal.Copy()
-					if g.Status == "completed" {
+					if g.Status == models.GoalStatusCompleted {
 						base = CurrentTheme.CompletedGoal.Copy()
 					}
 					if isFocused {

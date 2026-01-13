@@ -1,3 +1,5 @@
+// Package util provides common utilities including logging helpers,
+// file system operations, and string manipulation functions.
 package util
 
 import "log"

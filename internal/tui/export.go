@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"context"
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
@@ -36,8 +37,8 @@ type encryptedExport struct {
 	Data       string `json:"data"`
 }
 
-func ExportVault(db *database.Database, passphraseHash string) (string, error) {
-	workspaces, err := db.GetWorkspaces()
+func ExportVault(ctx context.Context, db Database, passphraseHash string) (string, error) {
+	workspaces, err := db.GetWorkspaces(ctx)
 	if err != nil {
 		return "", err
 	}
@@ -45,23 +46,23 @@ func ExportVault(db *database.Database, passphraseHash string) (string, error) {
 	for _, ws := range workspaces {
 		exportWorkspaces = append(exportWorkspaces, toExportWorkspace(ws))
 	}
-	days, err := db.GetAllDays()
+	days, err := db.GetAllDays(ctx)
 	if err != nil {
 		return "", err
 	}
-	sprints, err := db.GetAllSprintsFlat()
+	sprints, err := db.GetAllSprintsFlat(ctx)
 	if err != nil {
 		return "", err
 	}
-	goals, err := db.GetAllGoalsExport()
+	goals, err := db.GetAllGoalsExport(ctx)
 	if err != nil {
 		return "", err
 	}
-	journal, err := db.GetAllJournalEntriesExport()
+	journal, err := db.GetAllJournalEntriesExport(ctx)
 	if err != nil {
 		return "", err
 	}
-	deps, err := db.GetAllTaskDeps()
+	deps, err := db.GetAllTaskDeps(ctx)
 	if err != nil {
 		return "", err
 	}

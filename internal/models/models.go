@@ -1,3 +1,6 @@
+// Package models defines the core domain types for SSPT including
+// Workspace, Day, Sprint, Goal, and their status enumerations.
+// These types are used by both the database and TUI packages.
 package models
 
 import "time"
@@ -8,9 +11,39 @@ type SprintStatus string
 const (
 	StatusPending     SprintStatus = "pending"
 	StatusActive      SprintStatus = "active"
+	StatusPaused      SprintStatus = "paused"
 	StatusCompleted   SprintStatus = "completed"
 	StatusInterrupted SprintStatus = "interrupted"
 )
+
+func (s SprintStatus) IsValid() bool {
+	switch s {
+	case StatusPending, StatusActive, StatusPaused, StatusCompleted, StatusInterrupted:
+		return true
+	default:
+		return false
+	}
+}
+
+// GoalStatus enumerates the possible states of a goal.
+type GoalStatus string
+
+const (
+	GoalStatusPending    GoalStatus = "pending"
+	GoalStatusInProgress GoalStatus = "in_progress"
+	GoalStatusCompleted  GoalStatus = "completed"
+	GoalStatusBlocked    GoalStatus = "blocked"
+	GoalStatusArchived   GoalStatus = "archived"
+)
+
+func (s GoalStatus) IsValid() bool {
+	switch s {
+	case GoalStatusPending, GoalStatusInProgress, GoalStatusCompleted, GoalStatusBlocked, GoalStatusArchived:
+		return true
+	default:
+		return false
+	}
+}
 
 // Day represents a single calendar day.
 type Day struct {
@@ -37,7 +70,7 @@ type Sprint struct {
 	DayID          int64
 	WorkspaceID    *int64
 	SprintNumber   int
-	Status         string // pending, active, paused, completed, interrupted
+	Status         SprintStatus // pending, active, paused, completed, interrupted
 	StartTime      *time.Time
 	EndTime        *time.Time
 	LastPausedAt   *time.Time
@@ -52,10 +85,10 @@ type Goal struct {
 	SprintID       *int64 // Nil means backlog
 	Description    string
 	Notes          *string
-	Status         string  // open, done, blocked, waiting, archived
-	Priority       int     // 1=High, 3=Low
-	Effort         *string // S, M, L
-	Tags           *string // JSON array
+	Status         GoalStatus // open, done, blocked, waiting, archived
+	Priority       int        // 1=High, 3=Low
+	Effort         *string    // S, M, L
+	Tags           *string    // JSON array
 	RecurrenceRule *string
 	Links          *string // JSON array
 	Rank           int

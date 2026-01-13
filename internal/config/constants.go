@@ -1,3 +1,5 @@
+// Package config defines application-wide constants and configuration
+// values including timer durations, display settings, and paths.
 package config
 
 import "time"
@@ -6,7 +8,7 @@ import "time"
 const (
 	SprintDuration = 90 * time.Minute
 	BreakDuration  = 30 * time.Minute
-	AutoLockAfter  = 10 * time.Minute
+	AutoLockAfter  = 5 * time.Minute
 )
 
 // View modes.
@@ -35,6 +37,15 @@ const (
 // Database/application settings.
 const (
 	AppName               = "sspt"
-	DBFileName            = "sspt.db"
+	DBFileName            = "sprints.db"
 	MaxPassphraseAttempts = 5
+)
+
+// Display settings.
+const (
+	MinDisplayColumns      = 3
+	MaxDisplayColumns      = 4
+	AnalyticsChartPadding  = 24
+	AnalyticsChartMaxWidth = 48
+	AnalyticsChartMinWidth = 10
 )

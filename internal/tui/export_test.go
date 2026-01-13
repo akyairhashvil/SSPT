@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -10,11 +11,12 @@ import (
 )
 
 func TestExportVaultPlain(t *testing.T) {
+	ctx := context.Background()
 	dir := t.TempDir()
 	t.Setenv("XDG_DOCUMENTS_DIR", dir)
 
 	dbPath := filepath.Join(dir, "test.db")
-	db, err := database.Open(dbPath, "")
+	db, err := database.Open(ctx, dbPath, "")
 	if err != nil {
 		t.Fatalf("Open failed: %v", err)
 	}
@@ -24,15 +26,15 @@ func TestExportVaultPlain(t *testing.T) {
 		}
 	})
 
-	wsID, err := db.EnsureDefaultWorkspace()
+	wsID, err := db.EnsureDefaultWorkspace(ctx)
 	if err != nil {
 		t.Fatalf("EnsureDefaultWorkspace failed: %v", err)
 	}
-	if err := db.AddGoal(wsID, "Export Me", 0); err != nil {
+	if err := db.AddGoal(ctx, wsID, "Export Me", 0); err != nil {
 		t.Fatalf("AddGoal failed: %v", err)
 	}
 
-	path, err := ExportVault(db, "")
+	path, err := ExportVault(ctx, db, "")
 	if err != nil {
 		t.Fatalf("ExportVault failed: %v", err)
 	}

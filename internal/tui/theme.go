@@ -160,6 +160,28 @@ var Themes = map[string]Theme{
 	},
 }
 
+type FrameStyles struct {
+	Modal    lipgloss.Style
+	Lock     lipgloss.Style
+	Dialog   lipgloss.Style
+	Floating lipgloss.Style
+}
+
+func NewFrameStyles() FrameStyles {
+	base := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		Padding(1, 2)
+
+	return FrameStyles{
+		Modal:    base.Copy().BorderForeground(lipgloss.Color("62")),
+		Lock:     base.Copy().BorderForeground(lipgloss.Color("196")),
+		Dialog:   base.Copy().BorderForeground(lipgloss.Color("39")),
+		Floating: base.Copy().BorderForeground(lipgloss.Color("240")),
+	}
+}
+
+var Frames = NewFrameStyles()
+
 // CurrentTheme holds the currently active theme.
 // We initialize it to default to avoid nil pointer dereferences.
 var CurrentTheme = Themes["default"]

@@ -3,6 +3,7 @@ package tui
 import (
 	"testing"
 
+	"github.com/akyairhashvil/SSPT/internal/models"
 	"github.com/akyairhashvil/SSPT/internal/util"
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -19,7 +20,7 @@ func findSprintIndex(m DashboardModel, sprintNumber int) int {
 func TestDashboardSearchFlow(t *testing.T) {
 	m, db := setupIntegrationDashboard(t)
 	wsID := m.workspaces[m.activeWorkspaceIdx].ID
-	if err := db.AddGoal(wsID, "Search Target", 0); err != nil {
+	if err := db.AddGoal(m.ctx, wsID, "Search Target", 0); err != nil {
 		t.Fatalf("AddGoal failed: %v", err)
 	}
 	m.refreshData(m.day.ID)
@@ -42,7 +43,7 @@ func TestDashboardSearchFlow(t *testing.T) {
 func TestDashboardTagFlow(t *testing.T) {
 	m, db := setupIntegrationDashboard(t)
 	wsID := m.workspaces[m.activeWorkspaceIdx].ID
-	if err := db.AddGoal(wsID, "Tag Target", 0); err != nil {
+	if err := db.AddGoal(m.ctx, wsID, "Tag Target", 0); err != nil {
 		t.Fatalf("AddGoal failed: %v", err)
 	}
 	m.invalidateGoalCache()
@@ -66,7 +67,7 @@ func TestDashboardTagFlow(t *testing.T) {
 	m, _ = model.(DashboardModel)
 
 	var tags *string
-	if err := db.DB.QueryRow("SELECT tags FROM goals WHERE description = ?", "Tag Target").Scan(&tags); err != nil {
+	if err := db.DB.QueryRowContext(m.ctx, "SELECT tags FROM goals WHERE description = ?", "Tag Target").Scan(&tags); err != nil {
 		t.Fatalf("query tags failed: %v", err)
 	}
 	if tags == nil || len(util.JSONToTags(*tags)) == 0 {
@@ -77,10 +78,10 @@ func TestDashboardTagFlow(t *testing.T) {
 func TestDashboardDependencyFlow(t *testing.T) {
 	m, db := setupIntegrationDashboard(t)
 	wsID := m.workspaces[m.activeWorkspaceIdx].ID
-	if err := db.AddGoal(wsID, "Dep Target", 0); err != nil {
+	if err := db.AddGoal(m.ctx, wsID, "Dep Target", 0); err != nil {
 		t.Fatalf("AddGoal failed: %v", err)
 	}
-	if err := db.AddGoal(wsID, "Dep Source", 0); err != nil {
+	if err := db.AddGoal(m.ctx, wsID, "Dep Source", 0); err != nil {
 		t.Fatalf("AddGoal failed: %v", err)
 	}
 	m.invalidateGoalCache()
@@ -108,10 +109,10 @@ func TestDashboardDependencyFlow(t *testing.T) {
 	m, _ = model.(DashboardModel)
 
 	var targetID int64
-	if err := db.DB.QueryRow("SELECT id FROM goals WHERE description = ?", "Dep Target").Scan(&targetID); err != nil {
+	if err := db.DB.QueryRowContext(m.ctx, "SELECT id FROM goals WHERE description = ?", "Dep Target").Scan(&targetID); err != nil {
 		t.Fatalf("query target id failed: %v", err)
 	}
-	deps, err := db.GetGoalDependencies(targetID)
+	deps, err := db.GetGoalDependencies(m.ctx, targetID)
 	if err != nil {
 		t.Fatalf("GetGoalDependencies failed: %v", err)
 	}
@@ -123,7 +124,7 @@ func TestDashboardDependencyFlow(t *testing.T) {
 func TestDashboardRecurrenceFlow(t *testing.T) {
 	m, db := setupIntegrationDashboard(t)
 	wsID := m.workspaces[m.activeWorkspaceIdx].ID
-	if err := db.AddGoal(wsID, "Recurring Target", 0); err != nil {
+	if err := db.AddGoal(m.ctx, wsID, "Recurring Target", 0); err != nil {
 		t.Fatalf("AddGoal failed: %v", err)
 	}
 	m.invalidateGoalCache()
@@ -149,7 +150,7 @@ func TestDashboardRecurrenceFlow(t *testing.T) {
 	m, _ = model.(DashboardModel)
 
 	var rule *string
-	if err := db.DB.QueryRow("SELECT recurrence_rule FROM goals WHERE description = ?", "Recurring Target").Scan(&rule); err != nil {
+	if err := db.DB.QueryRowContext(m.ctx, "SELECT recurrence_rule FROM goals WHERE description = ?", "Recurring Target").Scan(&rule); err != nil {
 		t.Fatalf("query recurrence failed: %v", err)
 	}
 	if rule == nil || *rule != "daily" {
@@ -173,7 +174,7 @@ func TestDashboardJournalFlow(t *testing.T) {
 		t.Fatalf("expected journaling to end")
 	}
 
-	entries, err := db.GetJournalEntries(m.day.ID, m.workspaces[m.activeWorkspaceIdx].ID)
+	entries, err := db.GetJournalEntries(m.ctx, m.day.ID, m.workspaces[m.activeWorkspaceIdx].ID)
 	if err != nil {
 		t.Fatalf("GetJournalEntries failed: %v", err)
 	}
@@ -195,14 +196,14 @@ func TestDashboardStartSprintFlow(t *testing.T) {
 	model, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
 	m, _ = model.(DashboardModel)
 
-	sprints, err := db.GetSprints(m.day.ID, m.workspaces[m.activeWorkspaceIdx].ID)
+	sprints, err := db.GetSprints(m.ctx, m.day.ID, m.workspaces[m.activeWorkspaceIdx].ID)
 	if err != nil {
 		t.Fatalf("GetSprints failed: %v", err)
 	}
 	if len(sprints) == 0 {
 		t.Fatalf("expected at least one sprint")
 	}
-	if sprints[0].Status != "active" {
+	if sprints[0].Status != models.StatusActive {
 		t.Fatalf("expected sprint to be active, got %q", sprints[0].Status)
 	}
 }

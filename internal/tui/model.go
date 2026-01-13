@@ -1,10 +1,10 @@
 package tui
 
 import (
+	"context"
 	"fmt"
 	"strconv"
 
-	"github.com/akyairhashvil/SSPT/internal/database"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -20,7 +20,8 @@ const (
 // MainModel is the root bubbletea model that switches between sub-models.
 type MainModel struct {
 	state     SessionState
-	db        *database.Database
+	ctx       context.Context
+	db        Database
 	textInput textinput.Model
 	dashboard DashboardModel
 	err       error
@@ -28,22 +29,26 @@ type MainModel struct {
 	height    int
 }
 
-func NewMainModel(db *database.Database) MainModel {
+func NewMainModel(ctx context.Context, db Database) MainModel {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	// ... (rest of function is fine)
 	// Check if the day is already bootstrapped
-	dayID := db.CheckCurrentDay()
+	dayID := db.CheckCurrentDay(ctx)
 	if _, err := EnsureSeedFile(); err != nil {
-		m := MainModel{db: db, err: err}
+		m := MainModel{ctx: ctx, db: db, err: err}
 		return m
 	}
 
 	m := MainModel{
-		db: db,
+		ctx: ctx,
+		db:  db,
 	}
 
 	if dayID > 0 {
 		m.state = StateDashboard
-		m.dashboard = NewDashboardModel(db, dayID) // Load existing day
+		m.dashboard = NewDashboardModel(ctx, db, dayID) // Load existing day
 	} else {
 		m.state = StateInitializing
 		ti := textinput.New()
@@ -120,19 +125,19 @@ func (m MainModel) updateInitializing(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 			// EXECUTE THE BOOTSTRAP
-			wsID, err := m.db.EnsureDefaultWorkspace()
+			wsID, err := m.db.EnsureDefaultWorkspace(m.ctx)
 			if err != nil {
 				m.err = err
 				return m, nil
 			}
-			if err := m.db.BootstrapDay(wsID, numSprints); err != nil {
+			if err := m.db.BootstrapDay(m.ctx, wsID, numSprints); err != nil {
 				m.err = err
 				return m, nil
 			}
 
 			// Transition state
 			m.state = StateDashboard
-			m.dashboard = NewDashboardModel(m.db, m.db.CheckCurrentDay()) // Load the new day
+			m.dashboard = NewDashboardModel(m.ctx, m.db, m.db.CheckCurrentDay(m.ctx)) // Load the new day
 			m.dashboard.width = m.width
 			m.dashboard.height = m.height
 			return m, m.dashboard.Init()

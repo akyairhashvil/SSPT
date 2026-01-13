@@ -1,14 +1,23 @@
+// Package database provides SQLite-backed persistence for SSPT.
+// It handles database creation, migrations, encryption via SQLCipher,
+// and all CRUD operations for workspaces, days, sprints, and goals.
+//
+// The package uses a single Database struct that wraps *sql.DB and
+// provides transaction support through helper methods.
 package database
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
-	"log"
 	"net/url"
 	"os"
 	"strings"
+	"time"
+	"unicode"
 
+	"github.com/akyairhashvil/SSPT/internal/util"
 	_ "github.com/mattn/go-sqlite3"
 )
 
@@ -24,33 +33,35 @@ var (
 	ErrSQLCipherUnavailable = errors.New("sqlcipher is unavailable")
 )
 
+const defaultDBTimeout = 5 * time.Second
+
 // Open initializes the database connection and schema.
-func Open(filepath, key string) (*Database, error) {
-	return NewDatabase(filepath, key)
+func Open(ctx context.Context, filepath, key string) (*Database, error) {
+	return NewDatabase(ctx, filepath, key)
 }
 
-func NewDatabase(filepath, key string) (*Database, error) {
+func NewDatabase(ctx context.Context, filepath, key string) (*Database, error) {
 	d := &Database{dbFile: filepath}
-	db, err := d.openDB(filepath, key)
+	db, err := d.openDB(ctx, filepath, key)
 	if err != nil {
 		return nil, err
 	}
 	d.DB = db
-	d.cipherAvailable, d.cipherVersion = d.detectSQLCipher()
+	d.cipherAvailable, d.cipherVersion = d.detectSQLCipher(ctx)
 	if sqlcipherCompiled() {
 		d.cipherAvailable = true
 	}
-	if err := d.verifyDB(key); err != nil {
+	if err := d.verifyDB(ctx, key); err != nil {
 		return nil, err
 	}
-	if err := d.createTables(); err != nil {
+	if err := d.createTables(ctx); err != nil {
 		return nil, err
 	}
 	return d, nil
 }
 
-func NewTestDatabase() (*Database, error) {
-	return NewDatabase(":memory:", "")
+func NewTestDatabase(ctx context.Context) (*Database, error) {
+	return NewDatabase(ctx, ":memory:", "")
 }
 
 func (d *Database) Close() error {
@@ -60,7 +71,16 @@ func (d *Database) Close() error {
 	return d.DB.Close()
 }
 
-func (d *Database) createTables() error {
+func (d *Database) withTimeout(ctx context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return context.WithTimeout(ctx, timeout)
+}
+
+func (d *Database) createTables(ctx context.Context) error {
+	ctx, cancel := d.withTimeout(ctx, defaultDBTimeout)
+	defer cancel()
 	queries := []string{
 		`CREATE TABLE IF NOT EXISTS workspaces (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -142,20 +162,22 @@ func (d *Database) createTables() error {
 	}
 
 	for _, query := range queries {
-		_, err := d.DB.Exec(query)
+		_, err := d.DB.ExecContext(ctx, query)
 		if err != nil {
 			return fmt.Errorf("create tables: %w (%s)", err, query)
 		}
 	}
 
 	// Migrations for existing databases
-	if err := d.migrate(); err != nil {
+	if err := d.migrate(ctx); err != nil {
 		return err
 	}
 	return nil
 }
 
-func (d *Database) migrate() error {
+func (d *Database) migrate(ctx context.Context) error {
+	ctx, cancel := d.withTimeout(ctx, defaultDBTimeout)
+	defer cancel()
 	migrations := []string{
 		// Add last_paused_at to sprints
 		"ALTER TABLE sprints ADD COLUMN last_paused_at DATETIME",
@@ -218,7 +240,7 @@ func (d *Database) migrate() error {
 	}
 
 	for _, query := range migrations {
-		if _, err := d.DB.Exec(query); err != nil {
+		if _, err := d.DB.ExecContext(ctx, query); err != nil {
 			if isIgnorableMigrationErr(err) {
 				continue
 			}
@@ -245,7 +267,7 @@ func (d *Database) migrate() error {
 		ON task_deps(depends_on_id)`,
 	}
 	for _, stmt := range indexStatements {
-		if _, err := d.DB.Exec(stmt); err != nil {
+		if _, err := d.DB.ExecContext(ctx, stmt); err != nil {
 			return fmt.Errorf("create index: %w (%s)", err, stmt)
 		}
 	}
@@ -259,14 +281,16 @@ func isIgnorableMigrationErr(err error) bool {
 
 func rollbackWithLog(tx *sql.Tx, originalErr error) error {
 	if rbErr := tx.Rollback(); rbErr != nil {
-		log.Printf("rollback failed: %v (original: %v)", rbErr, originalErr)
+		util.LogError("rollback failed", fmt.Errorf("rollback error: %w (original: %v)", rbErr, originalErr))
 	}
 	return originalErr
 }
 
 // WithTx executes fn in a transaction and commits on success.
-func (d *Database) WithTx(fn func(*sql.Tx) error) error {
-	tx, err := d.DB.Begin()
+func (d *Database) WithTx(ctx context.Context, fn func(*sql.Tx) error) error {
+	ctx, cancel := d.withTimeout(ctx, defaultDBTimeout)
+	defer cancel()
+	tx, err := d.DB.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin transaction: %w", err)
 	}
@@ -281,29 +305,35 @@ func (d *Database) WithTx(fn func(*sql.Tx) error) error {
 
 func logCleanupError(context string, err error) {
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		log.Printf("%s: %v", context, err)
+		util.LogError(context, err)
 	}
 }
 
-func (d *Database) RekeyDB(key string) error {
+func (d *Database) RekeyDB(ctx context.Context, key string) error {
+	ctx, cancel := d.withTimeout(ctx, defaultDBTimeout)
+	defer cancel()
 	if key != "" {
-		if _, err := d.DB.Exec("PRAGMA key = ''"); err != nil {
-			log.Printf("reset pragma key failed: %v", err)
+		if _, err := d.DB.ExecContext(ctx, "PRAGMA key = ''"); err != nil {
+			util.LogError("reset pragma key failed", err)
 		}
 	}
-	_, err := d.DB.Exec(fmt.Sprintf("PRAGMA rekey = '%s'", escapeSQLiteString(key)))
+	escapedKey, err := pragmaValue(key)
+	if err != nil {
+		return err
+	}
+	_, err = d.DB.ExecContext(ctx, fmt.Sprintf("PRAGMA rekey = '%s'", escapedKey))
 	if err != nil {
 		if strings.Contains(strings.ToLower(err.Error()), "no such pragma") {
 			return ErrSQLCipherUnavailable
 		}
 		return err
 	}
-	d.cipherAvailable, d.cipherVersion = d.detectSQLCipher()
+	d.cipherAvailable, d.cipherVersion = d.detectSQLCipher(ctx)
 	if sqlcipherCompiled() {
 		d.cipherAvailable = true
 	}
 	if key != "" && d.dbFile != "" {
-		enc, encErr := isEncryptedFile(d.dbFile)
+		enc, encErr := isEncryptedFile(ctx, d.dbFile)
 		if encErr != nil {
 			return encErr
 		}
@@ -315,7 +345,9 @@ func (d *Database) RekeyDB(key string) error {
 	return nil
 }
 
-func (d *Database) EncryptDatabase(key string) error {
+func (d *Database) EncryptDatabase(ctx context.Context, key string) error {
+	ctx, cancel := d.withTimeout(ctx, defaultDBTimeout)
+	defer cancel()
 	if key == "" {
 		return fmt.Errorf("passphrase required")
 	}
@@ -344,34 +376,34 @@ func (d *Database) EncryptDatabase(key string) error {
 		return err
 	}
 
-	if err := plainDB.Ping(); err != nil {
+	if err := plainDB.PingContext(ctx); err != nil {
 		logCleanupError("plaintext close failed", plainDB.Close())
 		return fmt.Errorf("plaintext ping failed: %w", err)
 	}
 	var count int
-	if err := plainDB.QueryRow("SELECT COUNT(1) FROM sqlite_master").Scan(&count); err != nil {
+	if err := plainDB.QueryRowContext(ctx, "SELECT COUNT(1) FROM sqlite_master").Scan(&count); err != nil {
 		logCleanupError("plaintext close failed", plainDB.Close())
 		return fmt.Errorf("plaintext check failed: %w", err)
 	}
 
-	if _, err := plainDB.Exec("ATTACH DATABASE ':memory:' AS probe"); err == nil {
-		if _, detErr := plainDB.Exec("DETACH DATABASE probe"); detErr != nil {
-			log.Printf("detach probe failed: %v", detErr)
+	if _, err := plainDB.ExecContext(ctx, "ATTACH DATABASE ':memory:' AS probe"); err == nil {
+		if _, detErr := plainDB.ExecContext(ctx, "DETACH DATABASE probe"); detErr != nil {
+			util.LogError("detach probe failed", detErr)
 		}
 	}
 	attach := fmt.Sprintf("ATTACH DATABASE '%s' AS enc KEY '%s'", escapeSQLiteString(tempPath), escapeSQLiteString(key))
-	if _, err := plainDB.Exec(attach); err != nil {
+	if _, err := plainDB.ExecContext(ctx, attach); err != nil {
 		logCleanupError("plaintext close failed", plainDB.Close())
 		return fmt.Errorf("attach encrypted failed: %w", err)
 	}
-	if _, err := plainDB.Exec("SELECT sqlcipher_export('enc')"); err != nil {
-		if _, detErr := plainDB.Exec("DETACH DATABASE enc"); detErr != nil {
-			log.Printf("detach encrypted failed: %v", detErr)
+	if _, err := plainDB.ExecContext(ctx, "SELECT sqlcipher_export('enc')"); err != nil {
+		if _, detErr := plainDB.ExecContext(ctx, "DETACH DATABASE enc"); detErr != nil {
+			util.LogError("detach encrypted failed", detErr)
 		}
 		logCleanupError("plaintext close failed", plainDB.Close())
 		return fmt.Errorf("sqlcipher_export failed: %w", err)
 	}
-	if _, err := plainDB.Exec("DETACH DATABASE enc"); err != nil {
+	if _, err := plainDB.ExecContext(ctx, "DETACH DATABASE enc"); err != nil {
 		logCleanupError("plaintext close failed", plainDB.Close())
 		return fmt.Errorf("detach encrypted failed: %w", err)
 	}
@@ -379,21 +411,21 @@ func (d *Database) EncryptDatabase(key string) error {
 		return fmt.Errorf("plaintext close failed: %w", err)
 	}
 
-	if enc, encErr := isEncryptedFile(tempPath); encErr == nil && !enc {
+	if enc, encErr := isEncryptedFile(ctx, tempPath); encErr == nil && !enc {
 		return fmt.Errorf("export produced plaintext (encryption not applied)")
 	} else if encErr != nil {
 		return fmt.Errorf("encrypted probe failed: %w", encErr)
 	}
 
-	encDB, err := d.openDB(tempPath, key)
+	encDB, err := d.openDB(ctx, tempPath, key)
 	if err != nil {
 		return fmt.Errorf("encrypted open failed: %w", err)
 	}
-	if _, err := encDB.Exec("PRAGMA cipher_migrate"); err != nil {
+	if _, err := encDB.ExecContext(ctx, "PRAGMA cipher_migrate"); err != nil {
 		logCleanupError("encrypted close failed", encDB.Close())
 		return fmt.Errorf("encrypted migrate failed: %w", err)
 	}
-	if err := encDB.QueryRow("SELECT COUNT(1) FROM sqlite_master").Scan(&count); err != nil {
+	if err := encDB.QueryRowContext(ctx, "SELECT COUNT(1) FROM sqlite_master").Scan(&count); err != nil {
 		logCleanupError("encrypted close failed", encDB.Close())
 		return fmt.Errorf("encrypted verify failed: %w", err)
 	}
@@ -409,7 +441,7 @@ func (d *Database) EncryptDatabase(key string) error {
 		logCleanupError("cleanup temp db", os.Remove(tempPath))
 		return fmt.Errorf("encrypted rename failed: %w", err)
 	}
-	if err := d.reopenEncrypted(key); err != nil {
+	if err := d.reopenEncrypted(ctx, key); err != nil {
 		logCleanupError("preserve failed encrypted db", os.Rename(d.dbFile, tempPath))
 		logCleanupError("restore backup db", os.Rename(backupPath, d.dbFile))
 		logCleanupError("cleanup temp db", os.Remove(tempPath))
@@ -420,26 +452,29 @@ func (d *Database) EncryptDatabase(key string) error {
 	return nil
 }
 
-func (d *Database) reopenEncrypted(key string) error {
-	db, err := d.openDB(d.dbFile, key)
+func (d *Database) reopenEncrypted(ctx context.Context, key string) error {
+	db, err := d.openDB(ctx, d.dbFile, key)
 	if err != nil {
 		return err
 	}
 	d.DB = db
-	d.cipherAvailable, d.cipherVersion = d.detectSQLCipher()
+	d.cipherAvailable, d.cipherVersion = d.detectSQLCipher(ctx)
 	if sqlcipherCompiled() {
 		d.cipherAvailable = true
 	}
-	if err := d.verifyDB(key); err != nil {
+	if err := d.verifyDB(ctx, key); err != nil {
 		return err
 	}
-	if err := d.createTables(); err != nil {
+	if err := d.createTables(ctx); err != nil {
 		return err
 	}
 	return nil
 }
 
-func (d *Database) openDB(filepath, key string) (*sql.DB, error) {
+func (d *Database) openDB(ctx context.Context, filepath, key string) (*sql.DB, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	dsn := filepath
 	if sqlcipherCompiled() {
 		dsn = fmt.Sprintf("file:%s?mode=rwc&cache=shared", filepath)
@@ -454,17 +489,31 @@ func (d *Database) openDB(filepath, key string) (*sql.DB, error) {
 	db.SetMaxOpenConns(1)
 	db.SetMaxIdleConns(1)
 	db.SetConnMaxLifetime(0)
+	if err := db.PingContext(ctx); err != nil {
+		if closeErr := db.Close(); closeErr != nil {
+			util.LogError("close db after ping failed", closeErr)
+		}
+		if msg := strings.ToLower(err.Error()); strings.Contains(msg, "file is encrypted") || strings.Contains(msg, "not a database") {
+			if key == "" {
+				return nil, ErrDatabaseEncrypted
+			}
+			return nil, ErrWrongPassphrase
+		}
+		return nil, err
+	}
 	return db, nil
 }
 
-func (d *Database) verifyDB(key string) error {
+func (d *Database) verifyDB(ctx context.Context, key string) error {
+	ctx, cancel := d.withTimeout(ctx, defaultDBTimeout)
+	defer cancel()
 	var count int
-	err := d.DB.QueryRow("SELECT COUNT(1) FROM sqlite_master").Scan(&count)
+	err := d.DB.QueryRowContext(ctx, "SELECT COUNT(1) FROM sqlite_master").Scan(&count)
 	if err == nil {
 		if key != "" {
 			d.dbEncrypted = true
 		} else if d.dbFile != "" {
-			if enc, encErr := isEncryptedFile(d.dbFile); encErr == nil {
+			if enc, encErr := isEncryptedFile(ctx, d.dbFile); encErr == nil {
 				d.dbEncrypted = enc
 			}
 		}
@@ -474,7 +523,7 @@ func (d *Database) verifyDB(key string) error {
 	if strings.Contains(msg, "file is encrypted") || strings.Contains(msg, "not a database") {
 		enc := false
 		if d.dbFile != "" {
-			if encVal, encErr := isEncryptedFile(d.dbFile); encErr == nil {
+			if encVal, encErr := isEncryptedFile(ctx, d.dbFile); encErr == nil {
 				enc = encVal
 			}
 		}
@@ -493,16 +542,18 @@ func (d *Database) verifyDB(key string) error {
 	return err
 }
 
-func (d *Database) detectSQLCipher() (bool, string) {
+func (d *Database) detectSQLCipher(ctx context.Context) (bool, string) {
+	ctx, cancel := d.withTimeout(ctx, defaultDBTimeout)
+	defer cancel()
 	var version string
-	err := d.DB.QueryRow("PRAGMA cipher_version").Scan(&version)
+	err := d.DB.QueryRowContext(ctx, "PRAGMA cipher_version").Scan(&version)
 	if err == nil {
 		version = strings.TrimSpace(version)
 		if version != "" {
 			return true, version
 		}
 	}
-	rows, err := d.DB.Query("PRAGMA compile_options")
+	rows, err := d.DB.QueryContext(ctx, "PRAGMA compile_options")
 	if err != nil {
 		return false, ""
 	}
@@ -525,22 +576,50 @@ func (d *Database) detectSQLCipher() (bool, string) {
 	return false, ""
 }
 
-func (d *Database) EncryptionStatus() (bool, bool, string) {
-	return d.cipherAvailable, d.dbEncrypted, d.cipherVersion
+type EncryptionInfo struct {
+	CipherAvailable   bool
+	DatabaseEncrypted bool
+	CipherVersion     string
 }
 
+func (d *Database) EncryptionStatus() EncryptionInfo {
+	return EncryptionInfo{
+		CipherAvailable:   d.cipherAvailable,
+		DatabaseEncrypted: d.dbEncrypted,
+		CipherVersion:     d.cipherVersion,
+	}
+}
+
+// escapeSQLiteString escapes single quotes for use in PRAGMA commands.
+// IMPORTANT: This is ONLY safe for PRAGMA commands which do not support
+// parameterized queries. NEVER use this for regular SQL queries.
+// All user data queries MUST use parameterized queries (?, $1, etc.).
 func escapeSQLiteString(value string) string {
 	return strings.ReplaceAll(value, "'", "''")
 }
 
-func isEncryptedFile(path string) (bool, error) {
+// pragmaValue validates and escapes a value for use in PRAGMA commands.
+// Returns error if value contains unexpected characters.
+func pragmaValue(value string) (string, error) {
+	for _, r := range value {
+		if !unicode.IsLetter(r) && !unicode.IsDigit(r) && r != ' ' && r != '-' && r != '_' && r != '.' {
+			return "", fmt.Errorf("invalid character in PRAGMA value: %q", r)
+		}
+	}
+	return escapeSQLiteString(value), nil
+}
+
+func isEncryptedFile(ctx context.Context, path string) (bool, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	conn, err := sql.Open("sqlite3", path)
 	if err != nil {
 		return false, err
 	}
 	defer conn.Close()
 	var count int
-	err = conn.QueryRow("SELECT COUNT(1) FROM sqlite_master").Scan(&count)
+	err = conn.QueryRowContext(ctx, "SELECT COUNT(1) FROM sqlite_master").Scan(&count)
 	if err == nil {
 		return false, nil
 	}
@@ -552,25 +631,27 @@ func isEncryptedFile(path string) (bool, error) {
 }
 
 // IsEncryptedFile reports whether the database file appears encrypted.
-func IsEncryptedFile(path string) (bool, error) {
-	return isEncryptedFile(path)
+func IsEncryptedFile(ctx context.Context, path string) (bool, error) {
+	return isEncryptedFile(ctx, path)
 }
 
-func (d *Database) DatabaseHasData() bool {
+func (d *Database) DatabaseHasData(ctx context.Context) bool {
+	ctx, cancel := d.withTimeout(ctx, defaultDBTimeout)
+	defer cancel()
 	var count int
-	if err := d.DB.QueryRow("SELECT COUNT(1) FROM goals").Scan(&count); err == nil && count > 0 {
+	if err := d.DB.QueryRowContext(ctx, "SELECT COUNT(1) FROM goals").Scan(&count); err == nil && count > 0 {
 		return true
 	}
-	if err := d.DB.QueryRow("SELECT COUNT(1) FROM sprints").Scan(&count); err == nil && count > 0 {
+	if err := d.DB.QueryRowContext(ctx, "SELECT COUNT(1) FROM sprints").Scan(&count); err == nil && count > 0 {
 		return true
 	}
-	if err := d.DB.QueryRow("SELECT COUNT(1) FROM journal_entries").Scan(&count); err == nil && count > 0 {
+	if err := d.DB.QueryRowContext(ctx, "SELECT COUNT(1) FROM journal_entries").Scan(&count); err == nil && count > 0 {
 		return true
 	}
 	return false
 }
 
-func (d *Database) RecreateEncryptedDatabase(key string) error {
+func (d *Database) RecreateEncryptedDatabase(ctx context.Context, key string) error {
 	if key == "" {
 		return fmt.Errorf("passphrase required")
 	}
@@ -592,7 +673,7 @@ func (d *Database) RecreateEncryptedDatabase(key string) error {
 	if err := os.Rename(d.dbFile, backupPath); err != nil {
 		return fmt.Errorf("backup rename failed: %w", err)
 	}
-	if err := d.reopenEncrypted(key); err != nil {
+	if err := d.reopenEncrypted(ctx, key); err != nil {
 		logCleanupError("cleanup failed db", os.Remove(d.dbFile))
 		logCleanupError("restore backup db", os.Rename(backupPath, d.dbFile))
 		return fmt.Errorf("recreate encrypted failed: %w", err)
@@ -601,7 +682,7 @@ func (d *Database) RecreateEncryptedDatabase(key string) error {
 	return nil
 }
 
-func (d *Database) ClearDatabase() error {
+func (d *Database) ClearDatabase(ctx context.Context) error {
 	if d.dbFile == "" {
 		return fmt.Errorf("database path unavailable")
 	}
@@ -613,5 +694,5 @@ func (d *Database) ClearDatabase() error {
 	logCleanupError("cleanup db", os.Remove(d.dbFile))
 	logCleanupError("cleanup backup db", os.Remove(d.dbFile+".bak"))
 	logCleanupError("cleanup encrypted db", os.Remove(d.dbFile+".enc"))
-	return d.reopenEncrypted("")
+	return d.reopenEncrypted(ctx, "")
 }

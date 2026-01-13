@@ -1,14 +1,22 @@
 package database
 
-import "github.com/akyairhashvil/SSPT/internal/models"
+import (
+	"context"
 
-func (d *Database) AddJournalEntry(dayID int64, workspaceID int64, sprintID *int64, goalID *int64, content string) error {
-	_, err := d.DB.Exec("INSERT INTO journal_entries (day_id, workspace_id, sprint_id, goal_id, content) VALUES (?, ?, ?, ?, ?)", dayID, workspaceID, sprintID, goalID, content)
+	"github.com/akyairhashvil/SSPT/internal/models"
+)
+
+func (d *Database) AddJournalEntry(ctx context.Context, dayID int64, workspaceID int64, sprintID *int64, goalID *int64, content string) error {
+	ctx, cancel := d.withTimeout(ctx, defaultDBTimeout)
+	defer cancel()
+	_, err := d.DB.ExecContext(ctx, "INSERT INTO journal_entries (day_id, workspace_id, sprint_id, goal_id, content) VALUES (?, ?, ?, ?, ?)", dayID, workspaceID, sprintID, goalID, content)
 	return err
 }
 
-func (d *Database) GetJournalEntries(dayID int64, workspaceID int64) ([]models.JournalEntry, error) {
-	rows, err := d.DB.Query(`
+func (d *Database) GetJournalEntries(ctx context.Context, dayID int64, workspaceID int64) ([]models.JournalEntry, error) {
+	ctx, cancel := d.withTimeout(ctx, defaultDBTimeout)
+	defer cancel()
+	rows, err := d.DB.QueryContext(ctx, `
 		SELECT id, day_id, workspace_id, sprint_id, goal_id, content, created_at 
 		FROM journal_entries 
 		WHERE day_id = ? AND workspace_id = ?

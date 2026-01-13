@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/akyairhashvil/SSPT/internal/config"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 )
@@ -15,17 +16,14 @@ func (m DashboardModel) renderLockScreen() string {
 		title = "Set Passphrase"
 	}
 	logo := renderLogo()
-	lockTitle := fmt.Sprintf("%s | %s v%s", title, logo, AppVersion)
+	lockTitle := fmt.Sprintf("%s | %s v%s", title, logo, versionLabel())
 	lockContent.WriteString(CurrentTheme.Focused.Render(lockTitle) + "\n\n")
 	if m.lock.Message != "" {
 		lockContent.WriteString(CurrentTheme.Dim.Render(m.lock.Message) + "\n")
 	}
 	lockContent.WriteString(CurrentTheme.Focused.Render("> ") + m.lock.PassphraseInput.View())
 
-	lockFrame := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(CurrentTheme.Border).
-		Padding(1, 2)
+	lockFrame := Frames.Lock
 	lockBox := lockFrame.Render(lockContent.String())
 	return "\x1b[H\x1b[2J" + lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, lockBox)
 }
@@ -39,7 +37,7 @@ func (m DashboardModel) renderJournalPane() string {
 			analyticsContent.WriteString(CurrentTheme.Dim.Render("  (no workspaces)\n"))
 		} else {
 			activeWS := m.workspaces[m.activeWorkspaceIdx]
-			sprints, err := m.db.GetSprints(m.day.ID, activeWS.ID)
+			sprints, err := m.db.GetSprints(m.ctx, m.day.ID, activeWS.ID)
 			if err != nil {
 				analyticsContent.WriteString(CurrentTheme.Break.Render(fmt.Sprintf("  error loading sprints: %v\n", err)))
 			} else {
@@ -56,7 +54,7 @@ func (m DashboardModel) renderJournalPane() string {
 				var perSprintTotals []int
 				var perSprintCompleted []int
 				for _, id := range sprintIDs {
-					total, completed, err := m.db.GetSprintGoalCounts(id)
+					total, completed, err := m.db.GetSprintGoalCounts(m.ctx, id)
 					if err != nil {
 						continue
 					}
@@ -70,12 +68,12 @@ func (m DashboardModel) renderJournalPane() string {
 				} else {
 					analyticsContent.WriteString(CurrentTheme.Dim.Render(fmt.Sprintf("Total: %d  Completed: %d  Remaining: %d\n\n", totalAll, completedAll, totalAll-completedAll)))
 					analyticsContent.WriteString(CurrentTheme.Dim.Render("Sprint  Done/All  Progress\n"))
-					chartWidth := m.width - 24
-					if chartWidth > 48 {
-						chartWidth = 48
+					chartWidth := m.width - config.AnalyticsChartPadding
+					if chartWidth > config.AnalyticsChartMaxWidth {
+						chartWidth = config.AnalyticsChartMaxWidth
 					}
-					if chartWidth < 10 {
-						chartWidth = 10
+					if chartWidth < config.AnalyticsChartMinWidth {
+						chartWidth = config.AnalyticsChartMinWidth
 					}
 					cumCompleted := 0
 					for i := range sprintIDs {
@@ -101,10 +99,7 @@ func (m DashboardModel) renderJournalPane() string {
 				}
 			}
 		}
-		analyticsFrame := lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(CurrentTheme.Border).
-			Padding(0, 1)
+		analyticsFrame := Frames.Floating.Copy().Padding(0, 1)
 		analyticsExtraWidth := lipgloss.Width(analyticsFrame.Render(""))
 		analyticsWidth := m.width - analyticsExtraWidth
 		if analyticsWidth < 1 {
@@ -137,10 +132,7 @@ func (m DashboardModel) renderJournalPane() string {
 		passContent.WriteString(CurrentTheme.Dim.Render("Confirm") + "\n")
 		passContent.WriteString(confirmCursor + m.passphraseConfirm.View())
 
-		passFrame := lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(CurrentTheme.Border).
-			Padding(0, 1)
+		passFrame := Frames.Modal.Copy().Padding(0, 1)
 		passExtraWidth := lipgloss.Width(passFrame.Render(""))
 		passWidth := m.width - passExtraWidth
 		if passWidth < 1 {
@@ -241,10 +233,7 @@ func (m DashboardModel) renderJournalPane() string {
 			}
 		}
 
-		recFrame := lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(CurrentTheme.Border).
-			Padding(0, 1)
+		recFrame := Frames.Modal.Copy().Padding(0, 1)
 		recExtraWidth := lipgloss.Width(recFrame.Render(""))
 		recWidth := m.width - recExtraWidth
 		if recWidth < 1 {
@@ -290,10 +279,7 @@ func (m DashboardModel) renderJournalPane() string {
 			}
 		}
 
-		depFrame := lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(CurrentTheme.Border).
-			Padding(0, 1)
+		depFrame := Frames.Modal.Copy().Padding(0, 1)
 		depExtraWidth := lipgloss.Width(depFrame.Render(""))
 		depWidth := m.width - depExtraWidth
 		if depWidth < 1 {
@@ -315,10 +301,7 @@ func (m DashboardModel) renderJournalPane() string {
 				themeContent.WriteString(fmt.Sprintf("%s%s\n", cursor, name))
 			}
 		}
-		themeFrame := lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(CurrentTheme.Border).
-			Padding(0, 1)
+		themeFrame := Frames.Modal.Copy().Padding(0, 1)
 		themeExtraWidth := lipgloss.Width(themeFrame.Render(""))
 		themeWidth := m.width - themeExtraWidth
 		if themeWidth < 1 {
@@ -346,10 +329,7 @@ func (m DashboardModel) renderJournalPane() string {
 		tagContent.WriteString("\n" + CurrentTheme.Focused.Render("Custom") + "\n")
 		tagContent.WriteString(CurrentTheme.Focused.Render("> ") + m.tagInput.View())
 
-		tagFrame := lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(CurrentTheme.Border).
-			Padding(0, 1)
+		tagFrame := Frames.Modal.Copy().Padding(0, 1)
 		tagExtraWidth := lipgloss.Width(tagFrame.Render(""))
 		tagWidth := m.width - tagExtraWidth
 		if tagWidth < 1 {
@@ -378,14 +358,11 @@ func (m DashboardModel) renderJournalPane() string {
 					prefix = "> "
 					style = CurrentTheme.Focused
 				}
-				line := fmt.Sprintf("%s %s", CurrentTheme.Dim.Render(status), g.Description)
+				line := fmt.Sprintf("%s %s", CurrentTheme.Dim.Render(string(status)), g.Description)
 				searchContent.WriteString(prefix + style.Render(line) + "\n")
 			}
 		}
-		journalFrame := lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(CurrentTheme.Border).
-			Padding(0, 1)
+		journalFrame := Frames.Modal.Copy().Padding(0, 1)
 		journalExtraWidth := lipgloss.Width(journalFrame.Render(""))
 		journalWidth := m.width - journalExtraWidth
 		if journalWidth < 1 {
@@ -426,10 +403,7 @@ func (m DashboardModel) renderJournalPane() string {
 		if m.journaling {
 			journalContent.WriteString("\n" + CurrentTheme.Focused.Render("> ") + m.journalInput.View())
 		}
-		journalFrame := lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(CurrentTheme.Border).
-			Padding(0, 1)
+		journalFrame := Frames.Modal.Copy().Padding(0, 1)
 		journalExtraWidth := lipgloss.Width(journalFrame.Render(""))
 		journalWidth := m.width - journalExtraWidth
 		if journalWidth < 1 {
