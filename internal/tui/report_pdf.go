@@ -6,17 +6,16 @@ import (
 	"path/filepath"
 
 	"github.com/akyairhashvil/SSPT/internal/database"
-	"github.com/akyairhashvil/SSPT/internal/models"
 	"github.com/akyairhashvil/SSPT/internal/util"
 	"github.com/go-pdf/fpdf"
 )
 
-func GeneratePDFReport(dayID int64, workspaceID int64) (string, error) {
-	day, err := database.GetDay(dayID)
+func GeneratePDFReport(db *database.Database, dayID int64, workspaceID int64) (string, error) {
+	day, err := db.GetDay(dayID)
 	if err != nil {
 		return "", err
 	}
-	sprints, err := database.GetSprints(dayID, workspaceID)
+	sprints, err := db.GetSprints(dayID, workspaceID)
 	if err != nil {
 		return "", err
 	}
@@ -32,16 +31,16 @@ func GeneratePDFReport(dayID int64, workspaceID int64) (string, error) {
 	totalCompleted := 0
 
 	// Fetch ALL goals to build complete context
-	allGoals, err := database.GetAllGoals()
+	allGoals, err := db.GetAllGoals()
 	if err != nil {
 		return "", err
 	}
 	masterTree := BuildHierarchy(allGoals)
 
 	// Helper to check relevancy
-	var isRelevant func(g models.Goal, sprintID int64) bool
-	isRelevant = func(g models.Goal, sprintID int64) bool {
-		if g.SprintID.Valid && g.SprintID.Int64 == sprintID {
+	var isRelevant func(g GoalView, sprintID int64) bool
+	isRelevant = func(g GoalView, sprintID int64) bool {
+		if g.SprintID != nil && *g.SprintID == sprintID {
 			return true
 		}
 		for _, sub := range g.Subtasks {
@@ -64,7 +63,7 @@ func GeneratePDFReport(dayID int64, workspaceID int64) (string, error) {
 
 	for _, s := range sprints {
 		// Filter MasterTree for this sprint
-		var relevantRoots []models.Goal
+		var relevantRoots []GoalView
 		for _, root := range masterTree {
 			if isRelevant(root, s.ID) {
 				relevantRoots = append(relevantRoots, root)
@@ -113,7 +112,7 @@ func GeneratePDFReport(dayID int64, workspaceID int64) (string, error) {
 	pdf.Ln(10)
 
 	// Journaling
-	entries, err := database.GetJournalEntries(dayID, workspaceID)
+	entries, err := db.GetJournalEntries(dayID, workspaceID)
 	if err != nil {
 		return "", err
 	}

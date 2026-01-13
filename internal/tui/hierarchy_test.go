@@ -1,17 +1,16 @@
 package tui
 
 import (
-	"database/sql"
 	"testing"
 
 	"github.com/akyairhashvil/SSPT/internal/models"
 )
 
 func TestBuildHierarchy(t *testing.T) {
-	parentID := sql.NullInt64{Int64: 1, Valid: true}
+	parentID := int64(1)
 	goals := []models.Goal{
 		{ID: 1, Description: "parent"},
-		{ID: 2, ParentID: parentID, Description: "child"},
+		{ID: 2, ParentID: &parentID, Description: "child"},
 		{ID: 3, Description: "root"},
 	}
 
@@ -20,7 +19,7 @@ func TestBuildHierarchy(t *testing.T) {
 		t.Fatalf("expected 2 roots, got %d", len(roots))
 	}
 
-	var parent models.Goal
+	var parent GoalView
 	found := false
 	for _, g := range roots {
 		if g.ID == 1 {
@@ -38,12 +37,12 @@ func TestBuildHierarchy(t *testing.T) {
 }
 
 func TestFlattenMaxDepth(t *testing.T) {
-	parentID := sql.NullInt64{Int64: 1, Valid: true}
-	grandParentID := sql.NullInt64{Int64: 2, Valid: true}
+	parentID := int64(1)
+	grandParentID := int64(2)
 	goals := []models.Goal{
 		{ID: 1, Description: "root"},
-		{ID: 2, ParentID: parentID, Description: "child"},
-		{ID: 3, ParentID: grandParentID, Description: "grandchild"},
+		{ID: 2, ParentID: &parentID, Description: "child"},
+		{ID: 3, ParentID: &grandParentID, Description: "grandchild"},
 	}
 
 	roots := BuildHierarchy(goals)

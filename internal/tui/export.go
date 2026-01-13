@@ -36,8 +36,8 @@ type encryptedExport struct {
 	Data       string `json:"data"`
 }
 
-func ExportVault(passphraseHash string) (string, error) {
-	workspaces, err := database.GetWorkspaces()
+func ExportVault(db *database.Database, passphraseHash string) (string, error) {
+	workspaces, err := db.GetWorkspaces()
 	if err != nil {
 		return "", err
 	}
@@ -45,23 +45,23 @@ func ExportVault(passphraseHash string) (string, error) {
 	for _, ws := range workspaces {
 		exportWorkspaces = append(exportWorkspaces, toExportWorkspace(ws))
 	}
-	days, err := database.GetAllDays()
+	days, err := db.GetAllDays()
 	if err != nil {
 		return "", err
 	}
-	sprints, err := database.GetAllSprintsFlat()
+	sprints, err := db.GetAllSprintsFlat()
 	if err != nil {
 		return "", err
 	}
-	goals, err := database.GetAllGoalsExport()
+	goals, err := db.GetAllGoalsExport()
 	if err != nil {
 		return "", err
 	}
-	journal, err := database.GetAllJournalEntriesExport()
+	journal, err := db.GetAllJournalEntriesExport()
 	if err != nil {
 		return "", err
 	}
-	deps, err := database.GetAllTaskDeps()
+	deps, err := db.GetAllTaskDeps()
 	if err != nil {
 		return "", err
 	}

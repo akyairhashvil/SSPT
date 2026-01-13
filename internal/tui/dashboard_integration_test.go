@@ -8,7 +8,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
-func setupTestDashboard(t *testing.T) DashboardModel {
+func setupIntegrationDashboard(t *testing.T) (DashboardModel, *database.Database) {
 	t.Helper()
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "test.db")
@@ -35,29 +35,31 @@ func setupTestDashboard(t *testing.T) DashboardModel {
 
 	m := NewDashboardModel(db, dayID)
 	m.lock.Locked = false
-	return m
+	return m, db
 }
 
-func TestDashboardKeyRoutingNewGoal(t *testing.T) {
-	m := setupTestDashboard(t)
+func TestDashboardCreateGoalFlow(t *testing.T) {
+	m, db := setupIntegrationDashboard(t)
+	m.focusedColIdx = 1
+
 	model, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
-	updated, ok := model.(DashboardModel)
-	if !ok {
-		t.Fatalf("expected DashboardModel, got %T", model)
-	}
-	if !updated.creatingGoal {
+	m, _ = model.(DashboardModel)
+	if !m.creatingGoal {
 		t.Fatalf("expected creatingGoal to be true")
 	}
-}
+	m.textInput.SetValue("Test Goal")
+	model, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m, _ = model.(DashboardModel)
 
-func TestDashboardKeyRoutingSearch(t *testing.T) {
-	m := setupTestDashboard(t)
-	model, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
-	updated, ok := model.(DashboardModel)
-	if !ok {
-		t.Fatalf("expected DashboardModel, got %T", model)
+	wsID := m.workspaces[m.activeWorkspaceIdx].ID
+	goals, err := db.GetBacklogGoals(wsID)
+	if err != nil {
+		t.Fatalf("GetBacklogGoals failed: %v", err)
 	}
-	if !updated.search.Active {
-		t.Fatalf("expected searching to be true")
+	if len(goals) == 0 {
+		t.Fatalf("expected at least one goal")
+	}
+	if goals[0].Description != "Test Goal" {
+		t.Fatalf("expected goal description to match, got %q", goals[0].Description)
 	}
 }

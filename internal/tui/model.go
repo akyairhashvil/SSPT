@@ -1,7 +1,6 @@
 package tui
 
 import (
-	"database/sql"
 	"fmt"
 	"strconv"
 
@@ -21,7 +20,7 @@ const (
 // MainModel is the root bubbletea model that switches between sub-models.
 type MainModel struct {
 	state     SessionState
-	db        *sql.DB
+	db        *database.Database
 	textInput textinput.Model
 	dashboard DashboardModel
 	err       error
@@ -29,11 +28,14 @@ type MainModel struct {
 	height    int
 }
 
-func NewMainModel(db *sql.DB) MainModel {
+func NewMainModel(db *database.Database) MainModel {
 	// ... (rest of function is fine)
 	// Check if the day is already bootstrapped
-	dayID := database.CheckCurrentDay()
-	_, _ = EnsureSeedFile()
+	dayID := db.CheckCurrentDay()
+	if _, err := EnsureSeedFile(); err != nil {
+		m := MainModel{db: db, err: err}
+		return m
+	}
 
 	m := MainModel{
 		db: db,
@@ -118,15 +120,19 @@ func (m MainModel) updateInitializing(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 			// EXECUTE THE BOOTSTRAP
-			wsID, _ := database.EnsureDefaultWorkspace()
-			if err := database.BootstrapDay(wsID, numSprints); err != nil {
+			wsID, err := m.db.EnsureDefaultWorkspace()
+			if err != nil {
+				m.err = err
+				return m, nil
+			}
+			if err := m.db.BootstrapDay(wsID, numSprints); err != nil {
 				m.err = err
 				return m, nil
 			}
 
 			// Transition state
 			m.state = StateDashboard
-			m.dashboard = NewDashboardModel(m.db, database.CheckCurrentDay()) // Load the new day
+			m.dashboard = NewDashboardModel(m.db, m.db.CheckCurrentDay()) // Load the new day
 			m.dashboard.width = m.width
 			m.dashboard.height = m.height
 			return m, m.dashboard.Init()

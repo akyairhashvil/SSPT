@@ -1,7 +1,6 @@
 package tui
 
 import (
-	"database/sql"
 	"fmt"
 	"log"
 	"sort"
@@ -9,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/akyairhashvil/SSPT/internal/config"
 	"github.com/akyairhashvil/SSPT/internal/database"
 	"github.com/akyairhashvil/SSPT/internal/models"
 	"github.com/charmbracelet/bubbles/progress"
@@ -17,10 +17,10 @@ import (
 )
 
 const (
-	SprintDuration        = 90 * time.Minute
-	BreakDuration         = 30 * time.Minute
-	AutoLockAfter         = 10 * time.Minute
-	passphraseMaxAttempts = 5
+	SprintDuration        = config.SprintDuration
+	BreakDuration         = config.BreakDuration
+	AutoLockAfter         = config.AutoLockAfter
+	passphraseMaxAttempts = config.MaxPassphraseAttempts
 	passphraseLockout     = 30 * time.Second
 )
 
@@ -28,16 +28,16 @@ var AppVersion = "0"
 
 // View Modes
 const (
-	ViewModeAll     = 0
-	ViewModeFocused = 1 // Hide Completed
-	ViewModeMinimal = 2 // Hide Completed & Backlog
+	ViewModeAll     = config.ViewModeAll
+	ViewModeFocused = config.ViewModeFocused // Hide Completed
+	ViewModeMinimal = config.ViewModeMinimal // Hide Completed & Backlog
 )
 
 // --- Model ---
 type DashboardModel struct {
-	db                   *sql.DB
+	db                   *database.Database
 	day                  models.Day
-	sprints              []models.Sprint
+	sprints              []SprintView
 	workspaces           []models.Workspace
 	activeWorkspaceIdx   int
 	viewMode             int
@@ -78,11 +78,7 @@ type DashboardModel struct {
 	monthDayOptions      []string
 	confirmingDelete     bool
 	confirmDeleteGoalID  int64
-	locked               bool
-	lockMessage          string
-	passphraseHash       string
-	passphraseInput      textinput.Model
-	lastInput            time.Time
+	lock                 LockModel
 	changingPassphrase   bool
 	confirmingClearDB    bool
 	clearDBNeedsPass     bool
@@ -92,24 +88,15 @@ type DashboardModel struct {
 	passphraseCurrent    textinput.Model
 	passphraseNew        textinput.Model
 	passphraseConfirm    textinput.Model
-	passphraseAttempts   int
-	passphraseLockUntil  time.Time
 	journaling           bool
 	journalEntries       []models.JournalEntry
 	journalInput         textinput.Model
-	searching            bool
+	search               SearchModel
 	showAnalytics        bool
-	searchResults        []models.Goal
-	searchInput          textinput.Model
-	searchCursor         int
-	searchArchiveOnly    bool
 	expandedState        map[int64]bool
-	goalTreeCache        map[string][]models.Goal
+	goalTreeCache        map[string][]GoalView
 	progress             progress.Model
-	activeSprint         *models.Sprint
-	activeTask           *models.Goal
-	breakActive          bool
-	breakStart           time.Time
+	timer                TimerModel
 	textInput            textinput.Model
 	err                  error
 	statusMessage        string
@@ -123,8 +110,8 @@ type depOption struct {
 	Label string
 }
 
-func NewDashboardModel(db *sql.DB, dayID int64) DashboardModel {
-	_, wsErr := database.EnsureDefaultWorkspace()
+func NewDashboardModel(db *database.Database, dayID int64) DashboardModel {
+	_, wsErr := db.EnsureDefaultWorkspace()
 	ti := textinput.New()
 	ti.Placeholder = "New Objective..."
 	ti.CharLimit = 100
@@ -155,12 +142,17 @@ func NewDashboardModel(db *sql.DB, dayID int64) DashboardModel {
 	passConfirm.EchoMode = textinput.EchoPassword
 	passConfirm.Width = 30
 
+	lock := NewLockModel(AutoLockAfter, passInput)
+	search := NewSearchModel(si)
+
 	m := DashboardModel{
 		db:                 db,
 		textInput:          ti,
 		journalInput:       ji,
-		searchInput:        si,
 		tagInput:           tagInput,
+		lock:               lock,
+		search:             search,
+		timer:              NewTimerModel(),
 		progress:           progress.New(progress.WithDefaultGradient()),
 		activeWorkspaceIdx: 0,
 		focusedColIdx:      1,
@@ -177,26 +169,24 @@ func NewDashboardModel(db *sql.DB, dayID int64) DashboardModel {
 		monthDayOptions:    buildMonthDays(),
 		recurrenceSelected: make(map[string]bool),
 		recurrenceFocus:    "mode",
-		passphraseInput:    passInput,
 		passphraseCurrent:  passCurrent,
 		passphraseNew:      passNew,
 		passphraseConfirm:  passConfirm,
-		lastInput:          time.Now(),
 	}
 	if wsErr != nil {
 		m.setStatusError(fmt.Sprintf("Error ensuring default workspace: %v", wsErr))
 	} else if err := m.loadWorkspaces(); err != nil {
 		m.setStatusError(fmt.Sprintf("Error loading workspaces: %v", err))
 	}
-	if hash, ok := database.GetSetting("passphrase_hash"); ok && hash != "" {
-		m.passphraseHash = hash
-		m.locked = true
-		m.lockMessage = "Enter passphrase to unlock"
+	if hash, ok := m.db.GetSetting("passphrase_hash"); ok && hash != "" {
+		m.lock.PassphraseHash = hash
+		m.lock.Locked = true
+		m.lock.Message = "Enter passphrase to unlock"
 	} else {
-		m.locked = true
-		m.lockMessage = "Set passphrase to unlock"
+		m.lock.Locked = true
+		m.lock.Message = "Set passphrase to unlock"
 	}
-	m.passphraseInput.Focus()
+	m.lock.PassphraseInput.Focus()
 	sort.Strings(m.defaultTags)
 	for name := range Themes {
 		m.themeNames = append(m.themeNames, name)
@@ -228,36 +218,36 @@ func (m *DashboardModel) clearStatus() {
 }
 
 func (m *DashboardModel) passphraseRateLimited() (bool, time.Duration) {
-	if m.passphraseLockUntil.IsZero() {
+	if m.lock.LockUntil.IsZero() {
 		return false, 0
 	}
-	if time.Now().Before(m.passphraseLockUntil) {
-		return true, time.Until(m.passphraseLockUntil)
+	if time.Now().Before(m.lock.LockUntil) {
+		return true, time.Until(m.lock.LockUntil)
 	}
-	m.passphraseLockUntil = time.Time{}
+	m.lock.LockUntil = time.Time{}
 	return false, 0
 }
 
 func (m *DashboardModel) recordPassphraseFailure() {
-	m.passphraseAttempts++
-	if m.passphraseAttempts >= passphraseMaxAttempts {
-		m.passphraseAttempts = 0
-		m.passphraseLockUntil = time.Now().Add(passphraseLockout)
+	m.lock.Attempts++
+	if m.lock.Attempts >= passphraseMaxAttempts {
+		m.lock.Attempts = 0
+		m.lock.LockUntil = time.Now().Add(passphraseLockout)
 	}
 }
 
 func (m *DashboardModel) clearPassphraseFailures() {
-	m.passphraseAttempts = 0
-	m.passphraseLockUntil = time.Time{}
+	m.lock.Attempts = 0
+	m.lock.LockUntil = time.Time{}
 }
 
 func (m *DashboardModel) invalidateGoalCache() {
-	m.goalTreeCache = make(map[string][]models.Goal)
+	m.goalTreeCache = make(map[string][]GoalView)
 }
 
-func (m *DashboardModel) getGoalTree(key string, fetch func() ([]models.Goal, error)) ([]models.Goal, error) {
+func (m *DashboardModel) getGoalTree(key string, fetch func() ([]models.Goal, error)) ([]GoalView, error) {
 	if m.goalTreeCache == nil {
-		m.goalTreeCache = make(map[string][]models.Goal)
+		m.goalTreeCache = make(map[string][]GoalView)
 	}
 	if tree, ok := m.goalTreeCache[key]; ok {
 		return tree, nil
@@ -271,11 +261,11 @@ func (m *DashboardModel) getGoalTree(key string, fetch func() ([]models.Goal, er
 	return tree, nil
 }
 
-func cloneGoals(goals []models.Goal) []models.Goal {
+func cloneGoals(goals []GoalView) []GoalView {
 	if len(goals) == 0 {
 		return nil
 	}
-	out := make([]models.Goal, len(goals))
+	out := make([]GoalView, len(goals))
 	for i, g := range goals {
 		g.Subtasks = cloneGoals(g.Subtasks)
 		out[i] = g
@@ -284,7 +274,7 @@ func cloneGoals(goals []models.Goal) []models.Goal {
 }
 
 func (m *DashboardModel) loadWorkspaces() error {
-	workspaces, err := database.GetWorkspaces()
+	workspaces, err := m.db.GetWorkspaces()
 	if err != nil {
 		return err
 	}
@@ -295,9 +285,9 @@ func (m *DashboardModel) loadWorkspaces() error {
 func (m *DashboardModel) refreshData(dayID int64) {
 	m.clearStatus()
 	// Initialize with empty placeholders to prevent panics
-	m.sprints = []models.Sprint{
-		{ID: -1, SprintNumber: -1, Goals: []models.Goal{}},
-		{ID: 0, SprintNumber: 0, Goals: []models.Goal{}},
+	m.sprints = []SprintView{
+		{Sprint: models.Sprint{ID: -1, SprintNumber: -1}, Goals: []GoalView{}},
+		{Sprint: models.Sprint{ID: 0, SprintNumber: 0}, Goals: []GoalView{}},
 	}
 
 	if len(m.workspaces) == 0 {
@@ -307,65 +297,65 @@ func (m *DashboardModel) refreshData(dayID int64) {
 	activeWS := m.workspaces[m.activeWorkspaceIdx]
 	m.viewMode = activeWS.ViewMode
 	SetTheme(activeWS.Theme)
-	blockedIDs, err := database.GetBlockedGoalIDs(activeWS.ID)
+	blockedIDs, err := m.db.GetBlockedGoalIDs(activeWS.ID)
 	if err != nil {
 		m.setStatusError(fmt.Sprintf("Error loading blocked goals: %v", err))
 		return
 	}
-	m.activeTask = nil
-	if task, err := database.GetActiveTask(activeWS.ID); err == nil {
-		m.activeTask = task
+	m.timer.ActiveTask = nil
+	if task, err := m.db.GetActiveTask(activeWS.ID); err == nil {
+		m.timer.ActiveTask = task
 	}
 
-	day, err := database.GetDay(dayID)
+	day, err := m.db.GetDay(dayID)
 	if err != nil {
 		m.setStatusError(fmt.Sprintf("Error loading day: %v", err))
 		return
 	}
-	rawSprints, err := database.GetSprints(dayID, activeWS.ID)
+	rawSprints, err := m.db.GetSprints(dayID, activeWS.ID)
 	if err != nil {
 		m.setStatusError(fmt.Sprintf("Error loading sprints: %v", err))
 		return
 	}
-	journalEntries, err := database.GetJournalEntries(dayID, activeWS.ID)
+	journalEntries, err := m.db.GetJournalEntries(dayID, activeWS.ID)
 	if err != nil {
 		m.setStatusError(fmt.Sprintf("Error loading journal entries: %v", err))
 		return
 	}
 
-	var fullList []models.Sprint
+	var fullList []SprintView
 
 	// Archived Column (first)
 	if activeWS.ShowArchived {
 		archivedKey := fmt.Sprintf("archived:%d", activeWS.ID)
 		archivedGoals, err := m.getGoalTree(archivedKey, func() ([]models.Goal, error) {
-			return database.GetArchivedGoals(activeWS.ID)
+			return m.db.GetArchivedGoals(activeWS.ID)
 		})
 		if err != nil {
 			m.setStatusError(fmt.Sprintf("Error loading archived goals: %v", err))
 			return
 		}
 		flatArchived := Flatten(archivedGoals, 0, m.expandedState, 0)
-		fullList = append(fullList, models.Sprint{ID: -2, SprintNumber: -2, Goals: flatArchived})
+		fullList = append(fullList, SprintView{Sprint: models.Sprint{ID: -2, SprintNumber: -2}, Goals: flatArchived})
 	}
 
 	// Completed Column
 	if activeWS.ShowCompleted {
 		completedKey := fmt.Sprintf("completed:%d:%d", activeWS.ID, dayID)
 		completedGoals, err := m.getGoalTree(completedKey, func() ([]models.Goal, error) {
-			return database.GetCompletedGoalsForDay(dayID, activeWS.ID)
+			return m.db.GetCompletedGoalsForDay(dayID, activeWS.ID)
 		})
 		if err != nil {
 			m.setStatusError(fmt.Sprintf("Error loading completed goals: %v", err))
 			return
 		}
 		flatCompleted := Flatten(completedGoals, 0, m.expandedState, 0)
-		fullList = append(fullList, models.Sprint{ID: -1, SprintNumber: -1, Goals: flatCompleted})
+		fullList = append(fullList, SprintView{Sprint: models.Sprint{ID: -1, SprintNumber: -1}, Goals: flatCompleted})
 	}
 
-	var pruneCompleted func(goals []models.Goal) []models.Goal
-	pruneCompleted = func(goals []models.Goal) []models.Goal {
-		var out []models.Goal
+	var pruneCompleted func(goals []GoalView) []GoalView
+	pruneCompleted = func(goals []GoalView) []GoalView {
+		var out []GoalView
 		for _, g := range goals {
 			if g.Status != "completed" {
 				g.Subtasks = pruneCompleted(g.Subtasks)
@@ -375,9 +365,9 @@ func (m *DashboardModel) refreshData(dayID int64) {
 		return out
 	}
 
-	var applyBlocked func(goals []models.Goal, depth int) []models.Goal
+	var applyBlocked func(goals []GoalView, depth int) []GoalView
 	warned := false
-	applyBlocked = func(goals []models.Goal, depth int) []models.Goal {
+	applyBlocked = func(goals []GoalView, depth int) []GoalView {
 		if depth >= goalTreeMaxDepthDefault {
 			if !warned {
 				log.Printf("goal tree depth exceeds %d; truncating blocked propagation", goalTreeWarnDepth)
@@ -404,7 +394,7 @@ func (m *DashboardModel) refreshData(dayID int64) {
 	if activeWS.ShowBacklog {
 		backlogKey := fmt.Sprintf("backlog:%d", activeWS.ID)
 		backlogGoals, err := m.getGoalTree(backlogKey, func() ([]models.Goal, error) {
-			return database.GetBacklogGoals(activeWS.ID)
+			return m.db.GetBacklogGoals(activeWS.ID)
 		})
 		if err != nil {
 			m.setStatusError(fmt.Sprintf("Error loading backlog goals: %v", err))
@@ -412,30 +402,30 @@ func (m *DashboardModel) refreshData(dayID int64) {
 		}
 		backlogTree := applyBlocked(pruneCompleted(cloneGoals(backlogGoals)), 0)
 		flatBacklog := Flatten(backlogTree, 0, m.expandedState, 0)
-		fullList = append(fullList, models.Sprint{ID: 0, SprintNumber: 0, Goals: flatBacklog})
+		fullList = append(fullList, SprintView{Sprint: models.Sprint{ID: 0, SprintNumber: 0}, Goals: flatBacklog})
 	}
 
 	// Sprints
 	for i := range rawSprints {
 		sprintKey := fmt.Sprintf("sprint:%d", rawSprints[i].ID)
 		goals, err := m.getGoalTree(sprintKey, func() ([]models.Goal, error) {
-			return database.GetGoalsForSprint(rawSprints[i].ID)
+			return m.db.GetGoalsForSprint(rawSprints[i].ID)
 		})
 		if err != nil {
 			m.setStatusError(fmt.Sprintf("Error loading sprint goals: %v", err))
 			return
 		}
 		sprintTree := applyBlocked(pruneCompleted(cloneGoals(goals)), 0)
-		rawSprints[i].Goals = Flatten(sprintTree, 0, m.expandedState, 0)
-		fullList = append(fullList, rawSprints[i])
+		sprintView := SprintView{Sprint: rawSprints[i], Goals: Flatten(sprintTree, 0, m.expandedState, 0)}
+		fullList = append(fullList, sprintView)
 	}
 
 	m.sprints = fullList
 	m.day, m.journalEntries = day, journalEntries
-	m.activeSprint = nil
+	m.timer.ActiveSprint = nil
 	for i := range m.sprints {
 		if m.sprints[i].Status == "active" {
-			m.activeSprint = &m.sprints[i]
+			m.timer.ActiveSprint = &m.sprints[i]
 			break
 		}
 	}

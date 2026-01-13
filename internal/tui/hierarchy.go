@@ -12,25 +12,22 @@ const (
 )
 
 // BuildHierarchy organizes a flat list of goals into a tree structure based on ParentID.
-func BuildHierarchy(flatGoals []models.Goal) []models.Goal {
-	goalMap := make(map[int64]*models.Goal)
+func BuildHierarchy(flatGoals []models.Goal) []GoalView {
+	goalMap := make(map[int64]*GoalView)
+	nodes := make([]GoalView, len(flatGoals))
 
-	// Use a slice of pointers to track the nodes we are mutating
-	nodes := make([]*models.Goal, len(flatGoals))
-
-	// Initialize map. IMPORTANT: Use &flatGoals[i] to get stable pointers to the backing array.
-	// Using a loop variable 'g' and taking '&g' is risky in older Go versions and less clear.
 	for i := range flatGoals {
-		nodes[i] = &flatGoals[i]
-		goalMap[flatGoals[i].ID] = nodes[i]
+		nodes[i] = GoalView{Goal: flatGoals[i]}
+		goalMap[nodes[i].ID] = &nodes[i]
 	}
 
-	var rootPtrs []*models.Goal
+	var rootPtrs []*GoalView
 
 	// Build Tree
-	for _, node := range nodes {
-		if node.ParentID.Valid {
-			if parent, ok := goalMap[node.ParentID.Int64]; ok {
+	for i := range nodes {
+		node := &nodes[i]
+		if node.ParentID != nil {
+			if parent, ok := goalMap[*node.ParentID]; ok {
 				parent.Subtasks = append(parent.Subtasks, *node)
 			} else {
 				// Parent not found in this context (e.g. parent is in another sprint or completed)
@@ -42,10 +39,7 @@ func BuildHierarchy(flatGoals []models.Goal) []models.Goal {
 		}
 	}
 
-	// Convert pointers back to values for the return slice
-	// Note: The values in 'rootPtrs' have their 'Subtasks' fields populated because they point
-	// to the same memory locations as 'nodes' which were mutated via 'goalMap'.
-	var finalRoots []models.Goal
+	var finalRoots []GoalView
 	for _, ptr := range rootPtrs {
 		finalRoots = append(finalRoots, *ptr)
 	}
@@ -54,7 +48,7 @@ func BuildHierarchy(flatGoals []models.Goal) []models.Goal {
 }
 
 // Flatten converts a hierarchical tree into a flat list for rendering, respecting expansion state.
-func Flatten(goals []models.Goal, level int, expandedMap map[int64]bool, maxDepth int) []models.Goal {
+func Flatten(goals []GoalView, level int, expandedMap map[int64]bool, maxDepth int) []GoalView {
 	if maxDepth <= 0 {
 		maxDepth = goalTreeMaxDepthDefault
 	}
@@ -62,8 +56,8 @@ func Flatten(goals []models.Goal, level int, expandedMap map[int64]bool, maxDept
 	return flatten(goals, level, expandedMap, maxDepth, &warned)
 }
 
-func flatten(goals []models.Goal, level int, expandedMap map[int64]bool, maxDepth int, warned *bool) []models.Goal {
-	var out []models.Goal
+func flatten(goals []GoalView, level int, expandedMap map[int64]bool, maxDepth int, warned *bool) []GoalView {
+	var out []GoalView
 	for _, g := range goals {
 		if level >= maxDepth {
 			if !*warned {
@@ -82,9 +76,7 @@ func flatten(goals []models.Goal, level int, expandedMap map[int64]bool, maxDept
 		} else {
 			g.Expanded = true // Default to expanded if no map provided (e.g. reports)
 		}
-
 		out = append(out, g)
-
 		if g.Expanded && len(g.Subtasks) > 0 {
 			out = append(out, flatten(g.Subtasks, level+1, expandedMap, maxDepth, warned)...)
 		}

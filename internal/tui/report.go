@@ -6,17 +6,16 @@ import (
 	"path/filepath"
 
 	"github.com/akyairhashvil/SSPT/internal/database"
-	"github.com/akyairhashvil/SSPT/internal/models"
 	"github.com/akyairhashvil/SSPT/internal/util"
 )
 
 // GenerateReport creates a markdown summary of the day's activity.
-func GenerateReport(dayID int64, workspaceID int64) (string, error) {
-	day, err := database.GetDay(dayID)
+func GenerateReport(db *database.Database, dayID int64, workspaceID int64) (string, error) {
+	day, err := db.GetDay(dayID)
 	if err != nil {
 		return "", err
 	}
-	sprints, err := database.GetSprints(dayID, workspaceID)
+	sprints, err := db.GetSprints(dayID, workspaceID)
 	if err != nil {
 		return "", err
 	}
@@ -55,16 +54,16 @@ func GenerateReport(dayID int64, workspaceID int64) (string, error) {
 	totalGoals := 0
 
 	// Fetch ALL goals to build complete context
-	allGoals, err := database.GetAllGoals()
+	allGoals, err := db.GetAllGoals()
 	if err != nil {
 		return "", err
 	}
 	masterTree := BuildHierarchy(allGoals)
 
 	// Helper to check relevancy
-	var isRelevant func(g models.Goal, sprintID int64) bool
-	isRelevant = func(g models.Goal, sprintID int64) bool {
-		if g.SprintID.Valid && g.SprintID.Int64 == sprintID {
+	var isRelevant func(g GoalView, sprintID int64) bool
+	isRelevant = func(g GoalView, sprintID int64) bool {
+		if g.SprintID != nil && *g.SprintID == sprintID {
 			return true
 		}
 		for _, sub := range g.Subtasks {
@@ -88,7 +87,7 @@ func GenerateReport(dayID int64, workspaceID int64) (string, error) {
 	// Iterate Sprints
 	for _, s := range sprints {
 		// Filter MasterTree for this sprint
-		var relevantRoots []models.Goal
+		var relevantRoots []GoalView
 		for _, root := range masterTree {
 			if isRelevant(root, s.ID) {
 				relevantRoots = append(relevantRoots, root)
@@ -98,11 +97,11 @@ func GenerateReport(dayID int64, workspaceID int64) (string, error) {
 		flatGoals := Flatten(relevantRoots, 0, nil, 0) // Expand all
 
 		timeRange := "Pending"
-		if s.StartTime.Valid {
-			start := s.StartTime.Time.Format("15:04")
+		if s.StartTime != nil {
+			start := s.StartTime.Format("15:04")
 			end := "??"
-			if s.EndTime.Valid {
-				end = s.EndTime.Time.Format("15:04")
+			if s.EndTime != nil {
+				end = s.EndTime.Format("15:04")
 			}
 			timeRange = fmt.Sprintf("%s - %s", start, end)
 		}
@@ -163,7 +162,7 @@ func GenerateReport(dayID int64, workspaceID int64) (string, error) {
 	}
 
 	// Journal
-	entries, err := database.GetJournalEntries(dayID, workspaceID)
+	entries, err := db.GetJournalEntries(dayID, workspaceID)
 	if err != nil {
 		return "", err
 	}

@@ -1,7 +1,6 @@
 package database
 
 import (
-	"database/sql"
 	"encoding/json"
 	"time"
 
@@ -75,14 +74,6 @@ type ExportTaskDep struct {
 	DependsOnID int64 `json:"depends_on_id"`
 }
 
-func GetAllDays() ([]ExportDay, error) {
-	d, err := getDefaultDB()
-	if err != nil {
-		return nil, err
-	}
-	return d.GetAllDays()
-}
-
 func (d *Database) GetAllDays() ([]ExportDay, error) {
 	rows, err := d.DB.Query("SELECT id, date, started_at FROM days ORDER BY id ASC")
 	if err != nil {
@@ -103,14 +94,6 @@ func (d *Database) GetAllDays() ([]ExportDay, error) {
 	return out, nil
 }
 
-func GetAllSprintsFlat() ([]ExportSprint, error) {
-	d, err := getDefaultDB()
-	if err != nil {
-		return nil, err
-	}
-	return d.GetAllSprintsFlat()
-}
-
 func (d *Database) GetAllSprintsFlat() ([]ExportSprint, error) {
 	rows, err := d.DB.Query(`
 		SELECT id, day_id, workspace_id, sprint_number, status, start_time, end_time, last_paused_at, elapsed_seconds
@@ -123,38 +106,30 @@ func (d *Database) GetAllSprintsFlat() ([]ExportSprint, error) {
 	var out []ExportSprint
 	for rows.Next() {
 		var s ExportSprint
-		var wsID sql.NullInt64
-		var start, end, last sql.NullTime
+		var wsID *int64
+		var start, end, last *time.Time
 		if err := rows.Scan(&s.ID, &s.DayID, &wsID, &s.SprintNumber, &s.Status, &start, &end, &last, &s.ElapsedSeconds); err != nil {
 			return nil, err
 		}
-		if wsID.Valid {
-			id := wsID.Int64
+		if wsID != nil {
+			id := *wsID
 			s.WorkspaceID = &id
 		}
-		if start.Valid {
-			val := start.Time.Format(time.RFC3339)
+		if start != nil {
+			val := start.Format(time.RFC3339)
 			s.StartTime = &val
 		}
-		if end.Valid {
-			val := end.Time.Format(time.RFC3339)
+		if end != nil {
+			val := end.Format(time.RFC3339)
 			s.EndTime = &val
 		}
-		if last.Valid {
-			val := last.Time.Format(time.RFC3339)
+		if last != nil {
+			val := last.Format(time.RFC3339)
 			s.LastPausedAt = &val
 		}
 		out = append(out, s)
 	}
 	return out, nil
-}
-
-func GetAllGoalsExport() ([]ExportGoal, error) {
-	d, err := getDefaultDB()
-	if err != nil {
-		return nil, err
-	}
-	return d.GetAllGoalsExport()
 }
 
 func (d *Database) GetAllGoalsExport() ([]ExportGoal, error) {
@@ -169,67 +144,61 @@ func (d *Database) GetAllGoalsExport() ([]ExportGoal, error) {
 	var out []ExportGoal
 	for rows.Next() {
 		var g ExportGoal
-		var parentID, workspaceID, sprintID sql.NullInt64
-		var notes, effort, recurrence, tags, links sql.NullString
-		var completedAt, archivedAt, taskStarted sql.NullTime
+		var parentID, workspaceID, sprintID *int64
+		var notes, effort, recurrence, tags, links *string
+		var completedAt, archivedAt, taskStarted *time.Time
 		var taskActive int
 		if err := rows.Scan(&g.ID, &parentID, &workspaceID, &sprintID, &g.Description, &notes, &g.Status, &g.Priority, &effort, &tags, &recurrence, &links, &g.Rank, &g.CreatedAt, &completedAt, &archivedAt, &taskStarted, &g.TaskElapsedSec, &taskActive); err != nil {
 			return nil, err
 		}
-		if parentID.Valid {
-			id := parentID.Int64
+		if parentID != nil {
+			id := *parentID
 			g.ParentID = &id
 		}
-		if workspaceID.Valid {
-			id := workspaceID.Int64
+		if workspaceID != nil {
+			id := *workspaceID
 			g.WorkspaceID = &id
 		}
-		if sprintID.Valid {
-			id := sprintID.Int64
+		if sprintID != nil {
+			id := *sprintID
 			g.SprintID = &id
 		}
-		if notes.Valid {
-			val := notes.String
+		if notes != nil {
+			val := *notes
 			g.Notes = &val
 		}
-		if effort.Valid {
-			val := effort.String
+		if effort != nil {
+			val := *effort
 			g.Effort = &val
 		}
-		if recurrence.Valid {
-			val := recurrence.String
+		if recurrence != nil {
+			val := *recurrence
 			g.RecurrenceRule = &val
 		}
-		if tags.Valid && tags.String != "" && tags.String != "[]" {
-			g.Tags = util.JSONToTags(tags.String)
+		if tags != nil && *tags != "" && *tags != "[]" {
+			g.Tags = util.JSONToTags(*tags)
 		}
-		if links.Valid && links.String != "" && links.String != "[]" {
-			_ = json.Unmarshal([]byte(links.String), &g.Links)
+		if links != nil && *links != "" && *links != "[]" {
+			if err := json.Unmarshal([]byte(*links), &g.Links); err != nil {
+				return nil, err
+			}
 		}
-		if completedAt.Valid {
-			val := completedAt.Time.Format(time.RFC3339)
+		if completedAt != nil {
+			val := completedAt.Format(time.RFC3339)
 			g.CompletedAt = &val
 		}
-		if archivedAt.Valid {
-			val := archivedAt.Time.Format(time.RFC3339)
+		if archivedAt != nil {
+			val := archivedAt.Format(time.RFC3339)
 			g.ArchivedAt = &val
 		}
-		if taskStarted.Valid {
-			val := taskStarted.Time.Format(time.RFC3339)
+		if taskStarted != nil {
+			val := taskStarted.Format(time.RFC3339)
 			g.TaskStartedAt = &val
 		}
 		g.TaskActive = taskActive == 1
 		out = append(out, g)
 	}
 	return out, nil
-}
-
-func GetAllJournalEntriesExport() ([]ExportJournalEntry, error) {
-	d, err := getDefaultDB()
-	if err != nil {
-		return nil, err
-	}
-	return d.GetAllJournalEntriesExport()
 }
 
 func (d *Database) GetAllJournalEntriesExport() ([]ExportJournalEntry, error) {
@@ -244,37 +213,29 @@ func (d *Database) GetAllJournalEntriesExport() ([]ExportJournalEntry, error) {
 	var out []ExportJournalEntry
 	for rows.Next() {
 		var e ExportJournalEntry
-		var workspaceID, sprintID, goalID sql.NullInt64
-		var tags sql.NullString
+		var workspaceID, sprintID, goalID *int64
+		var tags *string
 		if err := rows.Scan(&e.ID, &e.DayID, &workspaceID, &sprintID, &goalID, &e.Content, &tags, &e.CreatedAt); err != nil {
 			return nil, err
 		}
-		if workspaceID.Valid {
-			id := workspaceID.Int64
+		if workspaceID != nil {
+			id := *workspaceID
 			e.WorkspaceID = &id
 		}
-		if sprintID.Valid {
-			id := sprintID.Int64
+		if sprintID != nil {
+			id := *sprintID
 			e.SprintID = &id
 		}
-		if goalID.Valid {
-			id := goalID.Int64
+		if goalID != nil {
+			id := *goalID
 			e.GoalID = &id
 		}
-		if tags.Valid && tags.String != "" && tags.String != "[]" {
-			e.Tags = util.JSONToTags(tags.String)
+		if tags != nil && *tags != "" && *tags != "[]" {
+			e.Tags = util.JSONToTags(*tags)
 		}
 		out = append(out, e)
 	}
 	return out, nil
-}
-
-func GetAllTaskDeps() ([]ExportTaskDep, error) {
-	d, err := getDefaultDB()
-	if err != nil {
-		return nil, err
-	}
-	return d.GetAllTaskDeps()
 }
 
 func (d *Database) GetAllTaskDeps() ([]ExportTaskDep, error) {

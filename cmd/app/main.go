@@ -43,16 +43,18 @@ func main() {
 			break
 		}
 	}
-	err := database.InitDB(dbPath, key)
+	db, err := database.Open(dbPath, key)
 	if key != "" && err != nil {
 		if errors.Is(err, database.ErrWrongPassphrase) || errors.Is(err, database.ErrDatabaseEncrypted) || errors.Is(err, database.ErrDatabaseCorrupted) {
 			enc, encErr := database.IsEncryptedFile(dbPath)
 			if encErr == nil && !enc {
-				if database.DB != nil {
-					_ = database.DB.Close()
+				if db != nil {
+					_ = db.Close()
+					db = nil
 				}
-				if initErr := database.InitDB(dbPath, ""); initErr == nil {
-					if encErr := database.EncryptDatabase(key); encErr == nil {
+				if initDB, initErr := database.Open(dbPath, ""); initErr == nil {
+					if encErr := initDB.EncryptDatabase(key); encErr == nil {
+						db = initDB
 						err = nil
 					} else {
 						err = encErr
@@ -79,10 +81,11 @@ func main() {
 				fmt.Println("Empty passphrase. Exiting.")
 				os.Exit(1)
 			}
-			if database.DB != nil {
-				_ = database.DB.Close()
+			if db != nil {
+				_ = db.Close()
+				db = nil
 			}
-			err = database.InitDB(dbPath, pass)
+			db, err = database.Open(dbPath, pass)
 			pass = ""
 			if err == nil {
 				break
@@ -101,15 +104,15 @@ func main() {
 		os.Exit(1)
 	}
 	if !dbExists && key != "" {
-		_ = database.SetSetting("passphrase_hash", util.HashPassphrase(key))
+		_ = db.SetSetting("passphrase_hash", util.HashPassphrase(key))
 	}
 	key = ""
-	defer database.DB.Close()
+	defer db.Close()
 
 	// 2. Initialize the Main Model
 	// We pass the DB connection, though it's also available via the global in database package
 	// Passing it explicitly is often cleaner for testing.
-	model := tui.NewMainModel(database.DB)
+	model := tui.NewMainModel(db)
 
 	// 3. Enable Mouse Support & Start Program
 	p := tea.NewProgram(model, tea.WithMouseCellMotion())

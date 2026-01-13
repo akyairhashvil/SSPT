@@ -1,30 +1,10 @@
 package database
 
-import (
-	"database/sql"
+import "github.com/akyairhashvil/SSPT/internal/models"
 
-	"github.com/akyairhashvil/SSPT/internal/models"
-)
-
-func AddJournalEntry(dayID int64, workspaceID int64, sprintID sql.NullInt64, goalID sql.NullInt64, content string) error {
-	d, err := getDefaultDB()
-	if err != nil {
-		return err
-	}
-	return d.AddJournalEntry(dayID, workspaceID, sprintID, goalID, content)
-}
-
-func (d *Database) AddJournalEntry(dayID int64, workspaceID int64, sprintID sql.NullInt64, goalID sql.NullInt64, content string) error {
+func (d *Database) AddJournalEntry(dayID int64, workspaceID int64, sprintID *int64, goalID *int64, content string) error {
 	_, err := d.DB.Exec("INSERT INTO journal_entries (day_id, workspace_id, sprint_id, goal_id, content) VALUES (?, ?, ?, ?, ?)", dayID, workspaceID, sprintID, goalID, content)
 	return err
-}
-
-func GetJournalEntries(dayID int64, workspaceID int64) ([]models.JournalEntry, error) {
-	d, err := getDefaultDB()
-	if err != nil {
-		return nil, err
-	}
-	return d.GetJournalEntries(dayID, workspaceID)
 }
 
 func (d *Database) GetJournalEntries(dayID int64, workspaceID int64) ([]models.JournalEntry, error) {

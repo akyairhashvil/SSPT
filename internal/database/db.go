@@ -20,29 +20,13 @@ type Database struct {
 	cipherVersion   string
 }
 
-var DefaultDB *Database
-var DB *sql.DB
-
 var (
 	ErrSQLCipherUnavailable = errors.New("sqlcipher is unavailable")
 )
 
-func getDefaultDB() (*Database, error) {
-	if DefaultDB == nil {
-		return nil, errors.New("database not initialized")
-	}
-	return DefaultDB, nil
-}
-
-// InitDB initializes the database connection and schema.
-func InitDB(filepath, key string) error {
-	db, err := NewDatabase(filepath, key)
-	if err != nil {
-		return err
-	}
-	DefaultDB = db
-	DB = db.DB
-	return nil
+// Open initializes the database connection and schema.
+func Open(filepath, key string) (*Database, error) {
+	return NewDatabase(filepath, key)
 }
 
 func NewDatabase(filepath, key string) (*Database, error) {
@@ -67,6 +51,13 @@ func NewDatabase(filepath, key string) (*Database, error) {
 
 func NewTestDatabase() (*Database, error) {
 	return NewDatabase(":memory:", "")
+}
+
+func (d *Database) Close() error {
+	if d == nil || d.DB == nil {
+		return nil
+	}
+	return d.DB.Close()
 }
 
 func (d *Database) createTables() error {
@@ -234,6 +225,30 @@ func (d *Database) migrate() error {
 			return fmt.Errorf("migration failed: %w (%s)", err, query)
 		}
 	}
+
+	indexStatements := []string{
+		`CREATE INDEX IF NOT EXISTS idx_goals_workspace_status
+		ON goals(workspace_id, status)`,
+		`CREATE INDEX IF NOT EXISTS idx_goals_sprint_id
+		ON goals(sprint_id) WHERE sprint_id IS NOT NULL`,
+		`CREATE INDEX IF NOT EXISTS idx_goals_parent_id
+		ON goals(parent_id) WHERE parent_id IS NOT NULL`,
+		`CREATE INDEX IF NOT EXISTS idx_sprints_day_id
+		ON sprints(day_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_journal_entries_sprint_id
+		ON journal_entries(sprint_id) WHERE sprint_id IS NOT NULL`,
+		`CREATE INDEX IF NOT EXISTS idx_journal_entries_goal_id
+		ON journal_entries(goal_id) WHERE goal_id IS NOT NULL`,
+		`CREATE INDEX IF NOT EXISTS idx_task_deps_goal_id
+		ON task_deps(goal_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_task_deps_depends_on_id
+		ON task_deps(depends_on_id)`,
+	}
+	for _, stmt := range indexStatements {
+		if _, err := d.DB.Exec(stmt); err != nil {
+			return fmt.Errorf("create index: %w (%s)", err, stmt)
+		}
+	}
 	return nil
 }
 
@@ -249,17 +264,32 @@ func rollbackWithLog(tx *sql.Tx, originalErr error) error {
 	return originalErr
 }
 
-func RekeyDB(key string) error {
-	d, err := getDefaultDB()
+// WithTx executes fn in a transaction and commits on success.
+func (d *Database) WithTx(fn func(*sql.Tx) error) error {
+	tx, err := d.DB.Begin()
 	if err != nil {
-		return err
+		return fmt.Errorf("begin transaction: %w", err)
 	}
-	return d.RekeyDB(key)
+	if err := fn(tx); err != nil {
+		return rollbackWithLog(tx, err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit transaction: %w", err)
+	}
+	return nil
+}
+
+func logCleanupError(context string, err error) {
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		log.Printf("%s: %v", context, err)
+	}
 }
 
 func (d *Database) RekeyDB(key string) error {
 	if key != "" {
-		_, _ = d.DB.Exec("PRAGMA key = ''")
+		if _, err := d.DB.Exec("PRAGMA key = ''"); err != nil {
+			log.Printf("reset pragma key failed: %v", err)
+		}
 	}
 	_, err := d.DB.Exec(fmt.Sprintf("PRAGMA rekey = '%s'", escapeSQLiteString(key)))
 	if err != nil {
@@ -285,14 +315,6 @@ func (d *Database) RekeyDB(key string) error {
 	return nil
 }
 
-func EncryptDatabase(key string) error {
-	d, err := getDefaultDB()
-	if err != nil {
-		return err
-	}
-	return d.EncryptDatabase(key)
-}
-
 func (d *Database) EncryptDatabase(key string) error {
 	if key == "" {
 		return fmt.Errorf("passphrase required")
@@ -310,11 +332,11 @@ func (d *Database) EncryptDatabase(key string) error {
 	tempPath := d.dbFile + ".enc"
 	backupPath := d.dbFile + ".bak"
 	defer func() {
-		_ = os.Remove(tempPath)
-		_ = os.Remove(backupPath)
+		logCleanupError("cleanup temp db", os.Remove(tempPath))
+		logCleanupError("cleanup backup db", os.Remove(backupPath))
 	}()
-	_ = os.Remove(tempPath)
-	_ = os.Remove(backupPath)
+	logCleanupError("cleanup temp db", os.Remove(tempPath))
+	logCleanupError("cleanup backup db", os.Remove(backupPath))
 
 	// Open plaintext DB without a key.
 	plainDB, err := sql.Open("sqlite3", d.dbFile)
@@ -323,30 +345,34 @@ func (d *Database) EncryptDatabase(key string) error {
 	}
 
 	if err := plainDB.Ping(); err != nil {
-		_ = plainDB.Close()
+		logCleanupError("plaintext close failed", plainDB.Close())
 		return fmt.Errorf("plaintext ping failed: %w", err)
 	}
 	var count int
 	if err := plainDB.QueryRow("SELECT COUNT(1) FROM sqlite_master").Scan(&count); err != nil {
-		_ = plainDB.Close()
+		logCleanupError("plaintext close failed", plainDB.Close())
 		return fmt.Errorf("plaintext check failed: %w", err)
 	}
 
 	if _, err := plainDB.Exec("ATTACH DATABASE ':memory:' AS probe"); err == nil {
-		_, _ = plainDB.Exec("DETACH DATABASE probe")
+		if _, detErr := plainDB.Exec("DETACH DATABASE probe"); detErr != nil {
+			log.Printf("detach probe failed: %v", detErr)
+		}
 	}
 	attach := fmt.Sprintf("ATTACH DATABASE '%s' AS enc KEY '%s'", escapeSQLiteString(tempPath), escapeSQLiteString(key))
 	if _, err := plainDB.Exec(attach); err != nil {
-		_ = plainDB.Close()
+		logCleanupError("plaintext close failed", plainDB.Close())
 		return fmt.Errorf("attach encrypted failed: %w", err)
 	}
 	if _, err := plainDB.Exec("SELECT sqlcipher_export('enc')"); err != nil {
-		_, _ = plainDB.Exec("DETACH DATABASE enc")
-		_ = plainDB.Close()
+		if _, detErr := plainDB.Exec("DETACH DATABASE enc"); detErr != nil {
+			log.Printf("detach encrypted failed: %v", detErr)
+		}
+		logCleanupError("plaintext close failed", plainDB.Close())
 		return fmt.Errorf("sqlcipher_export failed: %w", err)
 	}
 	if _, err := plainDB.Exec("DETACH DATABASE enc"); err != nil {
-		_ = plainDB.Close()
+		logCleanupError("plaintext close failed", plainDB.Close())
 		return fmt.Errorf("detach encrypted failed: %w", err)
 	}
 	if err := plainDB.Close(); err != nil {
@@ -364,11 +390,11 @@ func (d *Database) EncryptDatabase(key string) error {
 		return fmt.Errorf("encrypted open failed: %w", err)
 	}
 	if _, err := encDB.Exec("PRAGMA cipher_migrate"); err != nil {
-		_ = encDB.Close()
+		logCleanupError("encrypted close failed", encDB.Close())
 		return fmt.Errorf("encrypted migrate failed: %w", err)
 	}
 	if err := encDB.QueryRow("SELECT COUNT(1) FROM sqlite_master").Scan(&count); err != nil {
-		_ = encDB.Close()
+		logCleanupError("encrypted close failed", encDB.Close())
 		return fmt.Errorf("encrypted verify failed: %w", err)
 	}
 	if err := encDB.Close(); err != nil {
@@ -379,18 +405,18 @@ func (d *Database) EncryptDatabase(key string) error {
 		return fmt.Errorf("backup rename failed: %w", err)
 	}
 	if err := os.Rename(tempPath, d.dbFile); err != nil {
-		_ = os.Rename(backupPath, d.dbFile)
-		_ = os.Remove(tempPath)
+		logCleanupError("restore backup db", os.Rename(backupPath, d.dbFile))
+		logCleanupError("cleanup temp db", os.Remove(tempPath))
 		return fmt.Errorf("encrypted rename failed: %w", err)
 	}
 	if err := d.reopenEncrypted(key); err != nil {
-		_ = os.Rename(d.dbFile, tempPath)
-		_ = os.Rename(backupPath, d.dbFile)
-		_ = os.Remove(tempPath)
+		logCleanupError("preserve failed encrypted db", os.Rename(d.dbFile, tempPath))
+		logCleanupError("restore backup db", os.Rename(backupPath, d.dbFile))
+		logCleanupError("cleanup temp db", os.Remove(tempPath))
 		return fmt.Errorf("reopen encrypted failed: %w", err)
 	}
-	_ = os.Remove(backupPath)
-	_ = os.Remove(tempPath)
+	logCleanupError("cleanup backup db", os.Remove(backupPath))
+	logCleanupError("cleanup temp db", os.Remove(tempPath))
 	return nil
 }
 
@@ -499,14 +525,6 @@ func (d *Database) detectSQLCipher() (bool, string) {
 	return false, ""
 }
 
-func EncryptionStatus() (bool, bool, string) {
-	d, err := getDefaultDB()
-	if err != nil {
-		return false, false, ""
-	}
-	return d.cipherAvailable, d.dbEncrypted, d.cipherVersion
-}
-
 func (d *Database) EncryptionStatus() (bool, bool, string) {
 	return d.cipherAvailable, d.dbEncrypted, d.cipherVersion
 }
@@ -538,14 +556,6 @@ func IsEncryptedFile(path string) (bool, error) {
 	return isEncryptedFile(path)
 }
 
-func DatabaseHasData() bool {
-	d, err := getDefaultDB()
-	if err != nil {
-		return false
-	}
-	return d.DatabaseHasData()
-}
-
 func (d *Database) DatabaseHasData() bool {
 	var count int
 	if err := d.DB.QueryRow("SELECT COUNT(1) FROM goals").Scan(&count); err == nil && count > 0 {
@@ -560,14 +570,6 @@ func (d *Database) DatabaseHasData() bool {
 	return false
 }
 
-func RecreateEncryptedDatabase(key string) error {
-	d, err := getDefaultDB()
-	if err != nil {
-		return err
-	}
-	return d.RecreateEncryptedDatabase(key)
-}
-
 func (d *Database) RecreateEncryptedDatabase(key string) error {
 	if key == "" {
 		return fmt.Errorf("passphrase required")
@@ -580,10 +582,10 @@ func (d *Database) RecreateEncryptedDatabase(key string) error {
 	}
 	backupPath := d.dbFile + ".bak"
 	defer func() {
-		_ = os.Remove(backupPath)
-		_ = os.Remove(d.dbFile + ".enc")
+		logCleanupError("cleanup backup db", os.Remove(backupPath))
+		logCleanupError("cleanup encrypted temp db", os.Remove(d.dbFile+".enc"))
 	}()
-	_ = os.Remove(backupPath)
+	logCleanupError("cleanup backup db", os.Remove(backupPath))
 	if err := d.DB.Close(); err != nil {
 		return err
 	}
@@ -591,20 +593,12 @@ func (d *Database) RecreateEncryptedDatabase(key string) error {
 		return fmt.Errorf("backup rename failed: %w", err)
 	}
 	if err := d.reopenEncrypted(key); err != nil {
-		_ = os.Remove(d.dbFile)
-		_ = os.Rename(backupPath, d.dbFile)
+		logCleanupError("cleanup failed db", os.Remove(d.dbFile))
+		logCleanupError("restore backup db", os.Rename(backupPath, d.dbFile))
 		return fmt.Errorf("recreate encrypted failed: %w", err)
 	}
-	_ = os.Remove(backupPath)
+	logCleanupError("cleanup backup db", os.Remove(backupPath))
 	return nil
-}
-
-func ClearDatabase() error {
-	d, err := getDefaultDB()
-	if err != nil {
-		return err
-	}
-	return d.ClearDatabase()
 }
 
 func (d *Database) ClearDatabase() error {
@@ -616,8 +610,8 @@ func (d *Database) ClearDatabase() error {
 			return err
 		}
 	}
-	_ = os.Remove(d.dbFile)
-	_ = os.Remove(d.dbFile + ".bak")
-	_ = os.Remove(d.dbFile + ".enc")
+	logCleanupError("cleanup db", os.Remove(d.dbFile))
+	logCleanupError("cleanup backup db", os.Remove(d.dbFile+".bak"))
+	logCleanupError("cleanup encrypted db", os.Remove(d.dbFile+".enc"))
 	return d.reopenEncrypted("")
 }

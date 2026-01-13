@@ -1,9 +1,6 @@
 package models
 
-import (
-	"database/sql"
-	"time"
-)
+import "time"
 
 // SprintStatus enumerates the possible states of a work block.
 type SprintStatus string
@@ -38,53 +35,46 @@ type Workspace struct {
 type Sprint struct {
 	ID             int64
 	DayID          int64
-	WorkspaceID    sql.NullInt64
+	WorkspaceID    *int64
 	SprintNumber   int
 	Status         string // pending, active, paused, completed, interrupted
-	StartTime      sql.NullTime
-	EndTime        sql.NullTime
-	LastPausedAt   sql.NullTime
+	StartTime      *time.Time
+	EndTime        *time.Time
+	LastPausedAt   *time.Time
 	ElapsedSeconds int
-	Goals          []Goal // The tasks allocated to this sprint
 }
 
 // Goal represents a single actionable item (Task).
 type Goal struct {
 	ID             int64
-	ParentID       sql.NullInt64 // For Subtasks
-	WorkspaceID    sql.NullInt64 // For Multi-tenancy
-	SprintID       sql.NullInt64 // If Valid=false, it belongs to the Backlog
+	ParentID       *int64 // For Subtasks
+	WorkspaceID    *int64 // For Multi-tenancy
+	SprintID       *int64 // Nil means backlog
 	Description    string
-	Notes          sql.NullString
-	Status         string         // open, done, blocked, waiting, archived
-	Priority       int            // 1=High, 3=Low
-	Effort         sql.NullString // S, M, L
-	Tags           sql.NullString // JSON array
-	RecurrenceRule sql.NullString
-	Links          sql.NullString // JSON array
+	Notes          *string
+	Status         string  // open, done, blocked, waiting, archived
+	Priority       int     // 1=High, 3=Low
+	Effort         *string // S, M, L
+	Tags           *string // JSON array
+	RecurrenceRule *string
+	Links          *string // JSON array
 	Rank           int
 	CreatedAt      time.Time
-	CompletedAt    sql.NullTime
-	ArchivedAt     sql.NullTime
-	TaskStartedAt  sql.NullTime
+	CompletedAt    *time.Time
+	ArchivedAt     *time.Time
+	TaskStartedAt  *time.Time
 	TaskElapsedSec int
 	TaskActive     bool
-
-	// UI Helper fields (not in DB)
-	Subtasks []Goal
-	Expanded bool
-	Level    int // Indentation level
-	Blocked  bool
 }
 
 // JournalEntry represents a contextual note linked to a day and optionally a sprint.
 type JournalEntry struct {
 	ID          int64
 	DayID       int64
-	WorkspaceID sql.NullInt64
-	SprintID    sql.NullInt64
-	GoalID      sql.NullInt64 // Context link to specific task
+	WorkspaceID *int64
+	SprintID    *int64
+	GoalID      *int64 // Context link to specific task
 	Content     string
-	Tags        sql.NullString // JSON array
+	Tags        *string // JSON array
 	CreatedAt   time.Time
 }

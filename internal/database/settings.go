@@ -1,33 +1,15 @@
 package database
 
-import "database/sql"
-
-func GetSetting(key string) (string, bool) {
-	d, err := getDefaultDB()
-	if err != nil {
-		return "", false
-	}
-	return d.GetSetting(key)
-}
-
 func (d *Database) GetSetting(key string) (string, bool) {
-	var value sql.NullString
+	var value *string
 	err := d.DB.QueryRow("SELECT value FROM settings WHERE key = ?", key).Scan(&value)
 	if err != nil {
 		return "", false
 	}
-	if value.Valid {
-		return value.String, true
+	if value != nil {
+		return *value, true
 	}
 	return "", false
-}
-
-func SetSetting(key, value string) error {
-	d, err := getDefaultDB()
-	if err != nil {
-		return err
-	}
-	return d.SetSetting(key, value)
 }
 
 func (d *Database) SetSetting(key, value string) error {
