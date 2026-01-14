@@ -25,7 +25,7 @@ func nullableStringIf(v string) sql.NullString {
 
 // toNullableArg converts a pointer to an interface{} suitable for SQL args.
 // Returns nil if pointer is nil, otherwise returns the dereferenced value.
-func toNullableArg[T any](v *T) interface{} {
+func toNullableArg[T any](v *T) any {
 	if v == nil {
 		return nil
 	}

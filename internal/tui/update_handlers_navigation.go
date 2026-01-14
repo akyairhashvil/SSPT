@@ -54,6 +54,8 @@ func (m DashboardModel) handleScrolling(key string) (DashboardModel, bool) {
 	}
 	m.showAnalytics = !m.showAnalytics
 	m.search.Active = false
-	m.modal.journaling = false
+	if m.modal.Is(ModalJournaling) {
+		m.modal.Close()
+	}
 	return m, true
 }

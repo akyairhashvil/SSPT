@@ -84,13 +84,17 @@ func TestHandleGoalRecurrencePickerWeekly(t *testing.T) {
 	if !handled {
 		t.Fatalf("expected handled")
 	}
-	if !m.modal.settingRecurrence {
+	if !m.modal.Is(ModalRecurrence) {
 		t.Fatalf("expected recurrence modal")
 	}
-	if m.modal.recurrenceMode != "weekly" {
-		t.Fatalf("expected weekly mode, got %q", m.modal.recurrenceMode)
+	state, ok := m.modal.RecurrenceState()
+	if !ok {
+		t.Fatalf("expected recurrence state")
 	}
-	if !m.modal.recurrenceSelected["mon"] {
+	if state.Mode != "weekly" {
+		t.Fatalf("expected weekly mode, got %q", state.Mode)
+	}
+	if !state.Selected["mon"] {
 		t.Fatalf("expected monday selected")
 	}
 }

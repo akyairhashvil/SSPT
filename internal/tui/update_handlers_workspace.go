@@ -25,7 +25,7 @@ func (m DashboardModel) handleWorkspaceCreate(key string) (DashboardModel, tea.C
 	if key != "W" {
 		return m, nil, false
 	}
-	m.modal.creatingWorkspace = true
+	m.modal.Open(&WorkspaceCreateState{})
 	m.inputs.textInput.Focus()
 	return m, nil, true
 }
@@ -97,14 +97,15 @@ func (m DashboardModel) handleWorkspaceTheme(key string) (DashboardModel, tea.Cm
 		return m, nil, false
 	}
 	if len(m.workspaces) > 0 {
-		m.modal.themePicking = true
+		state := &ThemeState{}
 		activeWS := m.workspaces[m.activeWorkspaceIdx]
 		for i, t := range m.modal.themeNames {
 			if t == activeWS.Theme {
-				m.modal.themeCursor = i
+				state.Cursor = i
 				break
 			}
 		}
+		m.modal.Open(state)
 		return m, nil, true
 	}
 	return m, nil, false

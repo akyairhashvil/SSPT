@@ -54,6 +54,7 @@ type Database interface {
 	UpdateGoalRecurrence(ctx context.Context, goalID int64, rule string) error
 	SetGoalTags(ctx context.Context, goalID int64, tags []string) error
 	SetGoalDependencies(ctx context.Context, goalID int64, deps []int64) error
+	GetGoalByID(ctx context.Context, goalID int64) (models.Goal, error)
 	GetGoalDependencies(ctx context.Context, goalID int64) (map[int64]bool, error)
 	IsGoalBlocked(ctx context.Context, goalID int64) (bool, error)
 	GetBlockedGoalIDs(ctx context.Context, workspaceID int64) (map[int64]bool, error)

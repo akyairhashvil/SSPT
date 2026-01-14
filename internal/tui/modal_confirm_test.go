@@ -29,17 +29,13 @@ func TestHandleModalConfirmDelete(t *testing.T) {
 		t.Fatalf("expected goal to exist")
 	}
 
-	m.modal.confirmingDelete = true
-	m.modal.confirmDeleteGoalID = goalID
+	m.modal.Open(&GoalDeleteState{GoalID: goalID})
 	next, _, handled := m.handleModalConfirm(tea.KeyMsg{Type: tea.KeyEnter})
 	if !handled {
 		t.Fatalf("expected confirm to be handled")
 	}
-	if next.modal.confirmingDelete {
-		t.Fatalf("expected confirmingDelete to reset")
-	}
-	if next.modal.confirmDeleteGoalID != 0 {
-		t.Fatalf("expected confirmDeleteGoalID to reset")
+	if next.modal.Is(ModalGoalDelete) {
+		t.Fatalf("expected delete modal to close")
 	}
 }
 

@@ -58,7 +58,7 @@ func TestHandleScrolling(t *testing.T) {
 	m := setupTestDashboard(t)
 	m.showAnalytics = false
 	m.search.Active = true
-	m.modal.journaling = true
+	m.modal.Open(&JournalState{})
 
 	next, handled := m.handleScrolling("G")
 	if !handled {
@@ -67,7 +67,7 @@ func TestHandleScrolling(t *testing.T) {
 	if !next.showAnalytics {
 		t.Fatalf("expected analytics to be enabled")
 	}
-	if next.search.Active || next.modal.journaling {
+	if next.search.Active || next.modal.Is(ModalJournaling) {
 		t.Fatalf("expected search and journaling to be disabled")
 	}
 }

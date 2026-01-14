@@ -58,17 +58,6 @@ func (m DashboardModel) handleTick(msg TickMsg) (DashboardModel, tea.Cmd) {
 
 type KeyHandler func(DashboardModel, string) (DashboardModel, tea.Cmd, bool)
 
-type HandlerChain []KeyHandler
-
-func (chain HandlerChain) Handle(m DashboardModel, key string) (DashboardModel, tea.Cmd, bool) {
-	for _, handler := range chain {
-		if next, cmd, handled := handler(m, key); handled {
-			return next, cmd, true
-		}
-	}
-	return m, nil, false
-}
-
 func wrapKeyHandler(fn func(DashboardModel, string) (DashboardModel, bool)) KeyHandler {
 	return func(m DashboardModel, key string) (DashboardModel, tea.Cmd, bool) {
 		next, handled := fn(m, key)
@@ -76,55 +65,87 @@ func wrapKeyHandler(fn func(DashboardModel, string) (DashboardModel, bool)) KeyH
 	}
 }
 
-var normalModeHandlers = HandlerChain{
-	wrapKeyHandler(DashboardModel.handleTabFocus),
-	wrapKeyHandler(DashboardModel.handleArrowKeys),
-	wrapKeyHandler(DashboardModel.handleScrolling),
-	DashboardModel.handleGoalCreate,
-	DashboardModel.handleGoalEdit,
-	DashboardModel.handleGoalDelete,
-	DashboardModel.handleGoalMove,
-	DashboardModel.handleGoalExpandCollapse,
-	DashboardModel.handleGoalTaskTimer,
-	DashboardModel.handleGoalPriority,
-	DashboardModel.handleGoalJournalStart,
-	DashboardModel.handleGoalArchive,
-	DashboardModel.handleGoalDependencyPicker,
-	DashboardModel.handleGoalRecurrencePicker,
-	DashboardModel.handleGoalStatusToggle,
-	DashboardModel.handleGoalTagging,
-	DashboardModel.handleSprintPause,
-	DashboardModel.handleSprintStart,
-	DashboardModel.handleSprintReset,
-	DashboardModel.handleWorkspaceSprintCount,
-	DashboardModel.handleWorkspaceSwitch,
-	DashboardModel.handleWorkspaceCreate,
-	DashboardModel.handleWorkspaceVisibility,
-	DashboardModel.handleWorkspaceViewMode,
-	DashboardModel.handleWorkspaceTheme,
-	DashboardModel.handleWorkspaceSeedImport,
-	DashboardModel.handleWorkspaceReport,
-}
+var normalModeRegistry = buildNormalModeRegistry()
 
-var normalModeKeyHandlers = map[string]KeyHandler{
-	"q":      handleNormalQuit,
-	"ctrl+c": handleNormalQuit,
-	"L":      handleNormalLock,
-	"ctrl+e": handleNormalExport,
-	"/":      handleNormalSearch,
-	"C":      handleNormalClearDB,
-	"p":      handleNormalPassphrase,
-	"<":      handleNormalPrevDay,
-	">":      handleNormalNextDay,
+func buildNormalModeRegistry() *HandlerRegistry {
+	reg := NewHandlerRegistry()
+
+	register := func(key string, handler KeyHandler, desc string, priority int) {
+		reg.Register(KeyBinding{
+			Key:         key,
+			Handler:     handler,
+			Description: desc,
+			Priority:    priority,
+		})
+	}
+
+	// Navigation and scrolling.
+	register("tab", wrapKeyHandler(DashboardModel.handleTabFocus), "", 0)
+	register("right", wrapKeyHandler(DashboardModel.handleTabFocus), "", 0)
+	register("l", wrapKeyHandler(DashboardModel.handleTabFocus), "", 0)
+	register("shift+tab", wrapKeyHandler(DashboardModel.handleTabFocus), "", 0)
+	register("left", wrapKeyHandler(DashboardModel.handleTabFocus), "", 0)
+	register("h", wrapKeyHandler(DashboardModel.handleTabFocus), "", 0)
+	register("up", wrapKeyHandler(DashboardModel.handleArrowKeys), "", 0)
+	register("k", wrapKeyHandler(DashboardModel.handleArrowKeys), "", 0)
+	register("down", wrapKeyHandler(DashboardModel.handleArrowKeys), "", 0)
+	register("j", wrapKeyHandler(DashboardModel.handleArrowKeys), "", 0)
+	register("G", wrapKeyHandler(DashboardModel.handleScrolling), "Graph", 0)
+
+	// Goal operations.
+	register("n", DashboardModel.handleGoalCreate, "New", 0)
+	register("N", DashboardModel.handleGoalCreate, "Sub", 0)
+	register("e", DashboardModel.handleGoalEdit, "Edit", 0)
+	register("d", DashboardModel.handleGoalDelete, "Delete", 0)
+	register("backspace", DashboardModel.handleGoalDelete, "", 0)
+	register("m", DashboardModel.handleGoalMove, "Move", 0)
+	register("z", DashboardModel.handleGoalExpandCollapse, "Toggle", 0)
+	register("T", DashboardModel.handleGoalTaskTimer, "Task", 0)
+	register("P", DashboardModel.handleGoalPriority, "Priority", 0)
+	register("J", DashboardModel.handleGoalJournalStart, "Journal", 0)
+	register("ctrl+j", DashboardModel.handleGoalJournalStart, "", 0)
+	register("A", DashboardModel.handleGoalArchive, "Archive", 0)
+	register("u", DashboardModel.handleGoalArchive, "Unarchive", 0)
+	register("D", DashboardModel.handleGoalDependencyPicker, "Deps", 0)
+	register("R", DashboardModel.handleGoalRecurrencePicker, "Repeat", 0)
+	register(" ", DashboardModel.handleGoalStatusToggle, "", 0)
+	register("t", DashboardModel.handleGoalTagging, "Tag", 0)
+
+	// Sprint operations.
+	register("s", DashboardModel.handleSprintPause, "", 10)
+	register("s", DashboardModel.handleSprintStart, "", 5)
+	register("x", DashboardModel.handleSprintReset, "", 0)
+
+	// Workspace operations.
+	register("+", DashboardModel.handleWorkspaceSprintCount, "Sprint", 0)
+	register("-", DashboardModel.handleWorkspaceSprintCount, "Sprint", 0)
+	register("w", DashboardModel.handleWorkspaceSwitch, "Cycle", 0)
+	register("W", DashboardModel.handleWorkspaceCreate, "New WS", 0)
+	register("b", DashboardModel.handleWorkspaceVisibility, "Backlog", 0)
+	register("c", DashboardModel.handleWorkspaceVisibility, "Completed", 0)
+	register("a", DashboardModel.handleWorkspaceVisibility, "Archived", 0)
+	register("v", DashboardModel.handleWorkspaceViewMode, "View", 0)
+	register("Y", DashboardModel.handleWorkspaceTheme, "Theme", 0)
+	register("I", DashboardModel.handleWorkspaceSeedImport, "Import", 0)
+	register("ctrl+r", DashboardModel.handleWorkspaceReport, "Report", 0)
+
+	// Global controls.
+	register("q", handleNormalQuit, "Quit", 0)
+	register("ctrl+c", handleNormalQuit, "", 0)
+	register("L", handleNormalLock, "Lock", 0)
+	register("ctrl+e", handleNormalExport, "Export", 0)
+	register("/", handleNormalSearch, "Search", 0)
+	register("C", handleNormalClearDB, "Clear DB", 0)
+	register("p", handleNormalPassphrase, "Passphrase", 0)
+	register("<", handleNormalPrevDay, "Prev", 0)
+	register(">", handleNormalNextDay, "Next", 0)
+
+	return reg
 }
 
 func (m DashboardModel) handleNormalMode(msg tea.KeyMsg) (DashboardModel, tea.Cmd) {
 	key := msg.String()
-	if next, cmd, handled := normalModeHandlers.Handle(m, key); handled {
-		return next, cmd
-	}
-	if handler, ok := normalModeKeyHandlers[key]; ok {
-		next, cmd, _ := handler(m, key)
+	if next, cmd, handled := normalModeRegistry.Handle(m, key); handled {
 		return next, cmd
 	}
 	return m, nil

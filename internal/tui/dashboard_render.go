@@ -28,20 +28,6 @@ func taskElapsed(goal models.Goal) time.Duration {
 	return time.Duration(seconds) * time.Second
 }
 
-func formatDuration(d time.Duration) string {
-	total := int(d.Seconds())
-	if total < 0 {
-		total = 0
-	}
-	h := total / 3600
-	m := (total % 3600) / 60
-	s := total % 60
-	if h > 0 {
-		return fmt.Sprintf("%02d:%02d:%02d", h, m, s)
-	}
-	return fmt.Sprintf("%02d:%02d", m, s)
-}
-
 func truncateLabel(text string, max int) string {
 	if max <= 0 {
 		return ""

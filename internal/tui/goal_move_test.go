@@ -34,11 +34,11 @@ func TestHandleMoveModeToBacklog(t *testing.T) {
 	}
 	m.view.focusedColIdx = targetIdx
 	m.view.focusedGoalIdx = 0
-	m.modal.movingGoal = true
+	m.modal.Open(&GoalMoveState{})
 
 	m, _ = m.handleMoveMode(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'0'}})
-	if m.modal.movingGoal {
-		t.Fatalf("expected movingGoal cleared")
+	if m.modal.Is(ModalGoalMove) {
+		t.Fatalf("expected move modal cleared")
 	}
 	backlog, err := m.db.GetBacklogGoals(m.ctx, wsID)
 	if err != nil {
@@ -51,9 +51,9 @@ func TestHandleMoveModeToBacklog(t *testing.T) {
 
 func TestHandleMoveModeEsc(t *testing.T) {
 	m := setupTestDashboard(t)
-	m.modal.movingGoal = true
+	m.modal.Open(&GoalMoveState{})
 	m, _ = m.handleMoveMode(tea.KeyMsg{Type: tea.KeyEsc})
-	if m.modal.movingGoal {
-		t.Fatalf("expected movingGoal false after esc")
+	if m.modal.Is(ModalGoalMove) {
+		t.Fatalf("expected move modal false after esc")
 	}
 }

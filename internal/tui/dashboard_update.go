@@ -32,7 +32,7 @@ func (m DashboardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleModalState(msg)
 	}
 	if msg, ok := msg.(tea.KeyMsg); ok {
-		if m.modal.movingGoal {
+		if m.modal.Is(ModalGoalMove) {
 			return m.handleMoveMode(msg)
 		}
 		return m.handleNormalMode(msg)

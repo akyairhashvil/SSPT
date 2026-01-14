@@ -90,11 +90,9 @@ func NewDashboardModel(ctx context.Context, db Database, dayID int64, theme Them
 	modal.defaultTags = []string{"urgent", "docs", "blocked", "waiting", "bug", "idea", "review", "focus", "later"}
 	modal.themeOrder = []string{"default", "dracula", "cyberpunk", "solar"}
 	modal.recurrenceOptions = []string{"none", "daily", "weekly", "monthly"}
-	modal.recurrenceMode = "none"
 	modal.weekdayOptions = []string{"mon", "tue", "wed", "thu", "fri", "sat", "sun"}
 	modal.monthOptions = []string{"jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"}
 	modal.monthDayOptions = buildMonthDays()
-	modal.recurrenceFocus = "mode"
 
 	m := DashboardModel{
 		db:                 db,
@@ -444,18 +442,18 @@ func monthDayLimit(month string, year int) int {
 	}
 }
 
-func (m *DashboardModel) selectedMonths() []string {
+func (m *DashboardModel) selectedMonths(state *RecurrenceState) []string {
 	var out []string
-	for _, mo := range m.modal.monthOptions {
-		if m.modal.recurrenceSelected[mo] {
+	for _, mo := range state.MonthOptions {
+		if state.Selected[mo] {
 			out = append(out, mo)
 		}
 	}
 	return out
 }
 
-func (m *DashboardModel) monthlyMaxDay() int {
-	months := m.selectedMonths()
+func (m *DashboardModel) monthlyMaxDay(state *RecurrenceState) int {
+	months := m.selectedMonths(state)
 	if len(months) == 0 {
 		return 0
 	}
@@ -470,21 +468,21 @@ func (m *DashboardModel) monthlyMaxDay() int {
 	return maxDay
 }
 
-func (m *DashboardModel) pruneMonthlyDays(maxDay int) {
-	for key := range m.modal.recurrenceSelected {
+func (m *DashboardModel) pruneMonthlyDays(state *RecurrenceState, maxDay int) {
+	for key := range state.Selected {
 		if strings.HasPrefix(key, "day:") {
 			val := strings.TrimPrefix(key, "day:")
 			if day, err := strconv.Atoi(val); err == nil && day > maxDay {
-				delete(m.modal.recurrenceSelected, key)
+				delete(state.Selected, key)
 			}
 		}
 	}
 	if maxDay <= 0 {
-		m.modal.recurrenceDayCursor = 0
+		state.DayCursor = 0
 		return
 	}
-	if m.modal.recurrenceDayCursor > maxDay-1 {
-		m.modal.recurrenceDayCursor = maxDay - 1
+	if state.DayCursor > maxDay-1 {
+		state.DayCursor = maxDay - 1
 	}
 }
 

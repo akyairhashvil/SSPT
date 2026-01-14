@@ -35,15 +35,14 @@ func TestHandleLockedStateSuccessAndFailure(t *testing.T) {
 func TestHandleModalConfirmDeleteGoal(t *testing.T) {
 	m, goalID, sprintIdx := setupGoalInSprint(t)
 	m.view.focusedColIdx = sprintIdx
-	m.modal.confirmingDelete = true
-	m.modal.confirmDeleteGoalID = goalID
+	m.modal.Open(&GoalDeleteState{GoalID: goalID})
 
 	m, _, handled := m.handleModalConfirm(tea.KeyMsg{Type: tea.KeyEnter})
 	if !handled {
 		t.Fatalf("expected handled confirm")
 	}
-	if m.modal.confirmingDelete || m.modal.confirmDeleteGoalID != 0 {
-		t.Fatalf("expected delete modal cleared")
+	if m.modal.Is(ModalGoalDelete) {
+		t.Fatalf("expected delete modal closed")
 	}
 	goals, err := m.db.GetGoalsForSprint(m.ctx, m.sprints[sprintIdx].ID)
 	if err != nil {
@@ -56,15 +55,15 @@ func TestHandleModalConfirmDeleteGoal(t *testing.T) {
 
 func TestHandleModalConfirmJournalEntry(t *testing.T) {
 	m := setupTestDashboard(t)
-	m.modal.journaling = true
+	m.modal.Open(&JournalState{})
 	m.inputs.journalInput.SetValue("note")
 
 	m, _, handled := m.handleModalConfirm(tea.KeyMsg{Type: tea.KeyEnter})
 	if !handled {
 		t.Fatalf("expected handled")
 	}
-	if m.modal.journaling {
-		t.Fatalf("expected journaling closed")
+	if m.modal.Is(ModalJournaling) {
+		t.Fatalf("expected journaling modal closed")
 	}
 	entries, err := m.db.GetJournalEntries(m.ctx, m.day.ID, m.workspaces[m.activeWorkspaceIdx].ID)
 	if err != nil {
@@ -78,12 +77,11 @@ func TestHandleModalConfirmJournalEntry(t *testing.T) {
 func TestHandleModalInputArchiveFromConfirm(t *testing.T) {
 	m, goalID, sprintIdx := setupGoalInSprint(t)
 	m.view.focusedColIdx = sprintIdx
-	m.modal.confirmingDelete = true
-	m.modal.confirmDeleteGoalID = goalID
+	m.modal.Open(&GoalDeleteState{GoalID: goalID})
 
 	m, _ = m.handleModalInput(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
-	if m.modal.confirmingDelete {
-		t.Fatalf("expected confirm cleared after archive")
+	if m.modal.Is(ModalGoalDelete) {
+		t.Fatalf("expected confirm modal closed after archive")
 	}
 	archived, err := m.db.GetArchivedGoals(m.ctx, m.workspaces[m.activeWorkspaceIdx].ID)
 	if err != nil {

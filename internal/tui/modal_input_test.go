@@ -28,14 +28,10 @@ func TestHandleModalInputConfirmingDeleteArchive(t *testing.T) {
 		t.Fatalf("expected goal to exist")
 	}
 
-	m.modal.confirmingDelete = true
-	m.modal.confirmDeleteGoalID = goalID
+	m.modal.Open(&GoalDeleteState{GoalID: goalID})
 	next, _ := m.handleModalInput(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
-	if next.modal.confirmingDelete {
-		t.Fatalf("expected confirmingDelete to reset")
-	}
-	if next.modal.confirmDeleteGoalID != 0 {
-		t.Fatalf("expected confirmDeleteGoalID to reset")
+	if next.modal.Is(ModalGoalDelete) {
+		t.Fatalf("expected delete modal to close")
 	}
 }
 
@@ -48,29 +44,38 @@ func TestHandleModalInputConfirmingClearDB(t *testing.T) {
 	if next.security.confirmingClearDB {
 		t.Fatalf("expected confirmingClearDB to reset")
 	}
-	if !next.modal.initializingSprints {
-		t.Fatalf("expected initializingSprints to be set")
+	if !next.modal.Is(ModalWorkspaceInit) {
+		t.Fatalf("expected workspace init modal to be set")
 	}
 }
 
 func TestHandleModalInputRecurrenceNavigation(t *testing.T) {
 	m := setupTestDashboard(t)
-	m.modal.settingRecurrence = true
-	m.modal.recurrenceOptions = []string{"none", "weekly"}
-	m.modal.recurrenceCursor = 1
-	m.modal.weekdayOptions = []string{"mon", "tue"}
-	m.modal.recurrenceMode = "weekly"
-	m.modal.recurrenceFocus = "items"
-	m.modal.recurrenceItemCursor = 0
-	m.modal.recurrenceSelected = make(map[string]bool)
+	m.modal.Open(&RecurrenceState{
+		Options:        []string{"none", "weekly"},
+		Cursor:         1,
+		Mode:           "weekly",
+		WeekdayOptions: []string{"mon", "tue"},
+		Focus:          "items",
+		ItemCursor:     0,
+		Selected:       make(map[string]bool),
+	})
 
 	next, _ := m.handleModalInput(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{' '}})
-	if !next.modal.recurrenceSelected["mon"] {
+	state, ok := next.modal.RecurrenceState()
+	if !ok {
+		t.Fatalf("expected recurrence modal state")
+	}
+	if !state.Selected["mon"] {
 		t.Fatalf("expected recurrence selection to toggle")
 	}
 
 	next, _ = next.handleModalInput(tea.KeyMsg{Type: tea.KeyDown})
-	if next.modal.recurrenceItemCursor != 1 {
+	state, ok = next.modal.RecurrenceState()
+	if !ok {
+		t.Fatalf("expected recurrence modal state")
+	}
+	if state.ItemCursor != 1 {
 		t.Fatalf("expected recurrenceItemCursor to advance")
 	}
 }

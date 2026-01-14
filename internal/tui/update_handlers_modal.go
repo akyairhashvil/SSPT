@@ -24,8 +24,7 @@ func (m DashboardModel) handleModalCancel(msg tea.KeyMsg) (DashboardModel, tea.C
 	if msg.Type != tea.KeyEsc {
 		return m, nil, false
 	}
-	m.modal.confirmingDelete = false
-	m.modal.confirmDeleteGoalID = 0
+	m.modal.Close()
 	m.security.confirmingClearDB = false
 	m.security.clearDBNeedsPass = false
 	m.security.clearDBStatus = ""
@@ -36,7 +35,7 @@ func (m DashboardModel) handleModalCancel(msg tea.KeyMsg) (DashboardModel, tea.C
 	m.inputs.passphraseCurrent.Reset()
 	m.inputs.passphraseNew.Reset()
 	m.inputs.passphraseConfirm.Reset()
-	m.modal.creatingGoal, m.modal.editingGoal, m.modal.journaling, m.search.Active, m.modal.creatingWorkspace, m.modal.initializingSprints, m.modal.tagging, m.modal.themePicking, m.modal.depPicking, m.modal.settingRecurrence = false, false, false, false, false, false, false, false, false, false
+	m.search.Active = false
 	m.inputs.textInput.Reset()
 	m.inputs.journalInput.Reset()
 	m.search.Input.Reset()

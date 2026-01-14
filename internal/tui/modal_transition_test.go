@@ -8,8 +8,7 @@ import (
 
 func TestModalCancelClearsState(t *testing.T) {
 	m := setupTestDashboard(t)
-	m.modal.confirmingDelete = true
-	m.modal.confirmDeleteGoalID = 123
+	m.modal.Open(&GoalDeleteState{GoalID: 123})
 	m.security.confirmingClearDB = true
 	m.security.clearDBNeedsPass = true
 	m.security.clearDBStatus = "pending"
@@ -19,11 +18,8 @@ func TestModalCancelClearsState(t *testing.T) {
 	if !handled {
 		t.Fatalf("expected escape to be handled")
 	}
-	if next.modal.confirmingDelete {
-		t.Fatalf("expected confirmingDelete to be cleared")
-	}
-	if next.modal.confirmDeleteGoalID != 0 {
-		t.Fatalf("expected confirmDeleteGoalID to reset, got %d", next.modal.confirmDeleteGoalID)
+	if next.modal.Is(ModalGoalDelete) {
+		t.Fatalf("expected delete modal to be cleared")
 	}
 	if next.security.confirmingClearDB {
 		t.Fatalf("expected confirmingClearDB to be cleared")

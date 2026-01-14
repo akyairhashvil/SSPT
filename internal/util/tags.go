@@ -29,7 +29,11 @@ func TagsToJSON(tags []string) string {
 	if len(tags) == 0 {
 		return "[]"
 	}
-	bytes, _ := json.Marshal(tags)
+	bytes, err := json.Marshal(tags)
+	if err != nil {
+		LogError("marshal tags", err)
+		return "[]"
+	}
 	return string(bytes)
 }
 

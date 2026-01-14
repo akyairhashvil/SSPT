@@ -20,7 +20,10 @@ func main() {
 	ctx := context.Background()
 	// 1. Initialize Database
 	dbRoot := util.DataDir(config.AppName)
-	_ = os.MkdirAll(dbRoot, 0o755)
+	if err := os.MkdirAll(dbRoot, 0o755); err != nil {
+		fmt.Printf("Alas, there's been an error: %v\n", err)
+		os.Exit(1)
+	}
 	dbPath := filepath.Join(dbRoot, config.DBFileName)
 	cleanupStaleDBArtifacts(dbPath)
 	key := strings.TrimSpace(os.Getenv("SSPT_DB_KEY"))
@@ -53,7 +56,7 @@ func main() {
 			enc, encErr := database.IsEncryptedFile(ctx, dbPath)
 			if encErr == nil && !enc {
 				if db != nil {
-					_ = db.Close()
+					closeDB(db)
 					db = nil
 				}
 				if initDB, initErr := database.Open(ctx, dbPath, ""); initErr == nil {
@@ -86,7 +89,7 @@ func main() {
 				os.Exit(1)
 			}
 			if db != nil {
-				_ = db.Close()
+				closeDB(db)
 				db = nil
 			}
 			db, err = database.Open(ctx, dbPath, pass)
@@ -111,9 +114,11 @@ func main() {
 		os.Exit(1)
 	}
 	if !dbExists && key != "" {
-		_ = db.SetSetting(ctx, "passphrase_hash", util.HashPassphrase(key))
+		if err := db.SetSetting(ctx, "passphrase_hash", util.HashPassphrase(key)); err != nil {
+			util.LogError("store passphrase hash", err)
+		}
 	}
-	defer db.Close()
+	defer closeDB(db)
 
 	// 2. Initialize the Main Model
 	// We pass the DB connection, though it's also available via the global in database package
@@ -145,5 +150,14 @@ func cleanupFiles(paths ...string) {
 		if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
 			util.LogError("cleanup "+p, err)
 		}
+	}
+}
+
+func closeDB(db *database.Database) {
+	if db == nil {
+		return
+	}
+	if err := db.Close(); err != nil {
+		util.LogError("failed to close database", err)
 	}
 }

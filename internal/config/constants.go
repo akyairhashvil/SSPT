@@ -18,6 +18,11 @@ const (
 	ViewModeMinimal
 )
 
+// Goal IDs.
+const (
+	GoalIDNone int64 = 0
+)
+
 // Task statuses.
 const (
 	StatusPending   = "pending"
@@ -28,10 +33,9 @@ const (
 
 // Priority levels.
 const (
-	PriorityLow      = "low"
-	PriorityMedium   = "medium"
-	PriorityHigh     = "high"
-	PriorityCritical = "critical"
+	PriorityLow    = 1
+	PriorityMedium = 2
+	PriorityHigh   = 3
 )
 
 // Database/application settings.
@@ -41,6 +45,12 @@ const (
 	MaxPassphraseAttempts = 5
 )
 
+// Database timeouts.
+const (
+	DefaultDBTimeout     = 5 * time.Second
+	LongOperationTimeout = 30 * time.Second
+)
+
 // Display settings.
 const (
 	MinDisplayColumns      = 3
@@ -48,4 +58,6 @@ const (
 	AnalyticsChartPadding  = 24
 	AnalyticsChartMaxWidth = 48
 	AnalyticsChartMinWidth = 10
+	MinTerminalWidth       = 80
+	MinTerminalHeight      = 24
 )

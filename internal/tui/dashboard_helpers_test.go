@@ -31,29 +31,32 @@ func TestMonthDayLimit(t *testing.T) {
 
 func TestMonthlySelectionHelpers(t *testing.T) {
 	m := setupTestDashboard(t)
-	m.modal.monthOptions = []string{"jan", "feb", "mar"}
-	m.modal.recurrenceSelected = map[string]bool{
-		"jan":   true,
-		"mar":   true,
-		"day:5": true,
-		"day:31": true,
+	state := &RecurrenceState{
+		MonthOptions: []string{"jan", "feb", "mar"},
+		Selected: map[string]bool{
+			"jan":    true,
+			"mar":    true,
+			"day:5":  true,
+			"day:31": true,
+		},
+		DayCursor: 0,
 	}
 	m.day.Date = "2024-02-10"
 
-	months := m.selectedMonths()
+	months := m.selectedMonths(state)
 	if len(months) != 2 {
 		t.Fatalf("expected 2 selected months, got %d", len(months))
 	}
-	maxDay := m.monthlyMaxDay()
+	maxDay := m.monthlyMaxDay(state)
 	if maxDay != 31 {
 		t.Fatalf("expected max day 31, got %d", maxDay)
 	}
 
-	m.pruneMonthlyDays(30)
-	if m.modal.recurrenceSelected["day:31"] {
+	m.pruneMonthlyDays(state, 30)
+	if state.Selected["day:31"] {
 		t.Fatalf("expected day:31 to be pruned")
 	}
-	if m.modal.recurrenceDayCursor != 0 {
+	if state.DayCursor != 0 {
 		t.Fatalf("expected recurrenceDayCursor to reset when out of bounds")
 	}
 }

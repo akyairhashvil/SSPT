@@ -8,8 +8,8 @@ func TestHandleGoalCreate(t *testing.T) {
 	if !handled {
 		t.Fatalf("expected handler to handle create")
 	}
-	if !next.modal.creatingGoal {
-		t.Fatalf("expected creatingGoal to be set")
+	if !next.modal.Is(ModalGoalCreate) {
+		t.Fatalf("expected goal create modal to be set")
 	}
 }
 
@@ -44,16 +44,16 @@ func TestHandleGoalEditAndDelete(t *testing.T) {
 	if !handled {
 		t.Fatalf("expected edit handler to handle")
 	}
-	if !next.modal.editingGoal {
-		t.Fatalf("expected editingGoal to be true")
+	if !next.modal.Is(ModalGoalEdit) {
+		t.Fatalf("expected edit modal to be true")
 	}
 
 	next, _, handled = m.handleGoalDelete("d")
 	if !handled {
 		t.Fatalf("expected delete handler to handle")
 	}
-	if !next.modal.confirmingDelete {
-		t.Fatalf("expected confirmingDelete to be true")
+	if !next.modal.Is(ModalGoalDelete) {
+		t.Fatalf("expected delete confirm modal to be true")
 	}
 }
 
@@ -88,7 +88,7 @@ func TestHandleGoalMove(t *testing.T) {
 	if !handled {
 		t.Fatalf("expected move handler to handle")
 	}
-	if !next.modal.movingGoal {
-		t.Fatalf("expected movingGoal to be true")
+	if !next.modal.Is(ModalGoalMove) {
+		t.Fatalf("expected move modal to be true")
 	}
 }

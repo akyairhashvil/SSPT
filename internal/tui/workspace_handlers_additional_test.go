@@ -46,11 +46,12 @@ func TestWorkspaceThemePicker(t *testing.T) {
 	if !handled {
 		t.Fatalf("expected handled for theme picker")
 	}
-	if !m.modal.themePicking {
-		t.Fatalf("expected themePicking to be true")
+	if !m.modal.Is(ModalTheme) {
+		t.Fatalf("expected theme modal to be true")
 	}
-	if m.modal.themeCursor != 0 {
-		t.Fatalf("expected themeCursor to match active theme")
+	state, ok := m.modal.ThemeState()
+	if !ok || state.Cursor != 0 {
+		t.Fatalf("expected theme cursor to match active theme")
 	}
 }
 
@@ -125,8 +126,8 @@ func TestWorkspaceCreate(t *testing.T) {
 	if !handled {
 		t.Fatalf("expected handled for workspace create")
 	}
-	if !m.modal.creatingWorkspace {
-		t.Fatalf("expected creatingWorkspace true")
+	if !m.modal.Is(ModalWorkspaceCreate) {
+		t.Fatalf("expected workspace create modal true")
 	}
 	if !m.inputs.textInput.Focused() {
 		t.Fatalf("expected text input focused")

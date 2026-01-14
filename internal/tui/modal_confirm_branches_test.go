@@ -48,17 +48,18 @@ func setupTwoGoalsInSprint(t *testing.T) (DashboardModel, int64, int64, int64, i
 func TestHandleModalConfirmTagging(t *testing.T) {
 	m, goalID, _, _, sprintIdx := setupTwoGoalsInSprint(t)
 	m.view.focusedColIdx = sprintIdx
-	m.modal.tagging = true
-	m.modal.editingGoalID = goalID
-	m.modal.tagSelected = map[string]bool{"urgent": true}
+	m.modal.Open(&TaggingState{
+		GoalID:   goalID,
+		Selected: map[string]bool{"urgent": true},
+	})
 	m.inputs.tagInput.SetValue("custom")
 
 	m, _, handled := m.handleModalConfirm(tea.KeyMsg{Type: tea.KeyEnter})
 	if !handled {
 		t.Fatalf("expected handled")
 	}
-	if m.modal.tagging {
-		t.Fatalf("expected tagging closed")
+	if m.modal.Is(ModalTagging) {
+		t.Fatalf("expected tagging modal closed")
 	}
 	goals, err := m.db.GetGoalsForSprint(m.ctx, m.sprints[sprintIdx].ID)
 	if err != nil {
@@ -82,14 +83,13 @@ func TestHandleModalConfirmTagging(t *testing.T) {
 func TestHandleModalConfirmThemePicking(t *testing.T) {
 	m := setupTestDashboard(t)
 	m.modal.themeNames = []string{"default", "alt"}
-	m.modal.themeCursor = 1
-	m.modal.themePicking = true
+	m.modal.Open(&ThemeState{Cursor: 1})
 
 	m, _, handled := m.handleModalConfirm(tea.KeyMsg{Type: tea.KeyEnter})
 	if !handled {
 		t.Fatalf("expected handled")
 	}
-	if m.modal.themePicking {
+	if m.modal.Is(ModalTheme) {
 		t.Fatalf("expected theme modal closed")
 	}
 	if m.workspaces[m.activeWorkspaceIdx].Theme != "alt" {
@@ -99,9 +99,10 @@ func TestHandleModalConfirmThemePicking(t *testing.T) {
 
 func TestHandleModalConfirmDepPicking(t *testing.T) {
 	m, goalA, goalB, _, _ := setupTwoGoalsInSprint(t)
-	m.modal.depPicking = true
-	m.modal.editingGoalID = goalA
-	m.modal.depSelected = map[int64]bool{goalB: true}
+	m.modal.Open(&DependencyState{
+		GoalID:   goalA,
+		Selected: map[int64]bool{goalB: true},
+	})
 
 	m, _, handled := m.handleModalConfirm(tea.KeyMsg{Type: tea.KeyEnter})
 	if !handled {
@@ -118,16 +119,18 @@ func TestHandleModalConfirmDepPicking(t *testing.T) {
 
 func TestHandleModalConfirmRecurrenceWeekly(t *testing.T) {
 	m, goalID, _, sprintID, _ := setupTwoGoalsInSprint(t)
-	m.modal.settingRecurrence = true
-	m.modal.editingGoalID = goalID
-	m.modal.recurrenceMode = "weekly"
-	m.modal.recurrenceSelected = map[string]bool{"mon": true}
+	m.modal.Open(&RecurrenceState{
+		GoalID:         goalID,
+		Mode:           "weekly",
+		Selected:       map[string]bool{"mon": true},
+		WeekdayOptions: []string{"mon"},
+	})
 
 	m, _, handled := m.handleModalConfirm(tea.KeyMsg{Type: tea.KeyEnter})
 	if !handled {
 		t.Fatalf("expected handled")
 	}
-	if m.modal.settingRecurrence {
+	if m.modal.Is(ModalRecurrence) {
 		t.Fatalf("expected recurrence modal closed")
 	}
 	goals, err := m.db.GetGoalsForSprint(m.ctx, sprintID)

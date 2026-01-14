@@ -13,14 +13,14 @@ import (
 func (m DashboardModel) handleGoalCreate(key string) (DashboardModel, tea.Cmd, bool) {
 	switch key {
 	case "n":
-		m.modal.creatingGoal, m.modal.editingGoalID = true, 0
+		m.modal.Open(&GoalCreateState{})
 		m.inputs.textInput.Placeholder = "New Objective..."
 		m.inputs.textInput.Focus()
 		return m, nil, true
 	case "N":
 		if m.validSprintIndex(m.view.focusedColIdx) && m.view.focusedColIdx > 0 && len(m.sprints[m.view.focusedColIdx].Goals) > m.view.focusedGoalIdx {
 			parent := m.sprints[m.view.focusedColIdx].Goals[m.view.focusedGoalIdx]
-			m.modal.creatingGoal, m.modal.editingGoalID = true, parent.ID
+			m.modal.Open(&GoalCreateState{ParentID: parent.ID})
 			m.inputs.textInput.Placeholder = "New Subtask..."
 			m.inputs.textInput.Focus()
 			return m, nil, true
@@ -35,7 +35,7 @@ func (m DashboardModel) handleGoalEdit(key string) (DashboardModel, tea.Cmd, boo
 	}
 	if m.validSprintIndex(m.view.focusedColIdx) && len(m.sprints[m.view.focusedColIdx].Goals) > m.view.focusedGoalIdx {
 		target := m.sprints[m.view.focusedColIdx].Goals[m.view.focusedGoalIdx]
-		m.modal.editingGoal, m.modal.editingGoalID = true, target.ID
+		m.modal.Open(&GoalEditState{GoalID: target.ID})
 		m.inputs.textInput.SetValue(target.Description)
 		m.inputs.textInput.Focus()
 		return m, nil, true
@@ -47,8 +47,7 @@ func (m DashboardModel) handleGoalDelete(key string) (DashboardModel, tea.Cmd, b
 	switch key {
 	case "d", "backspace":
 		if m.validSprintIndex(m.view.focusedColIdx) && len(m.sprints[m.view.focusedColIdx].Goals) > m.view.focusedGoalIdx {
-			m.modal.confirmingDelete = true
-			m.modal.confirmDeleteGoalID = m.sprints[m.view.focusedColIdx].Goals[m.view.focusedGoalIdx].ID
+			m.modal.Open(&GoalDeleteState{GoalID: m.sprints[m.view.focusedColIdx].Goals[m.view.focusedGoalIdx].ID})
 		}
 		return m, nil, true
 	}
@@ -60,7 +59,7 @@ func (m DashboardModel) handleGoalMove(key string) (DashboardModel, tea.Cmd, boo
 		return m, nil, false
 	}
 	if m.validSprintIndex(m.view.focusedColIdx) && len(m.sprints[m.view.focusedColIdx].Goals) > m.view.focusedGoalIdx {
-		m.modal.movingGoal = true
+		m.modal.Open(&GoalMoveState{})
 		return m, nil, true
 	}
 	return m, nil, false
@@ -70,7 +69,7 @@ func (m DashboardModel) handleMoveMode(msg tea.Msg) (DashboardModel, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		if msg.Type == tea.KeyEsc {
-			m.modal.movingGoal = false
+			m.modal.Close()
 			return m, nil
 		}
 		if len(msg.String()) == 1 && strings.Contains("012345678", msg.String()) {
@@ -103,7 +102,7 @@ func (m DashboardModel) handleMoveMode(msg tea.Msg) (DashboardModel, tea.Cmd) {
 					}
 				}
 			}
-			m.modal.movingGoal = false
+			m.modal.Close()
 			return m, nil
 		}
 	}
@@ -170,14 +169,14 @@ func (m DashboardModel) handleGoalPriority(key string) (DashboardModel, tea.Cmd,
 func (m DashboardModel) handleGoalJournalStart(key string) (DashboardModel, tea.Cmd, bool) {
 	switch key {
 	case "ctrl+j":
-		m.modal.journaling, m.modal.editingGoalID = true, 0
+		m.modal.Open(&JournalState{})
 		m.inputs.journalInput.Placeholder = "Log your thoughts..."
 		m.inputs.journalInput.Focus()
 		return m, nil, true
 	case "J":
 		if m.validSprintIndex(m.view.focusedColIdx) && len(m.sprints[m.view.focusedColIdx].Goals) > m.view.focusedGoalIdx {
 			target := m.sprints[m.view.focusedColIdx].Goals[m.view.focusedGoalIdx]
-			m.modal.journaling, m.modal.editingGoalID = true, target.ID
+			m.modal.Open(&JournalState{GoalID: target.ID})
 			m.inputs.journalInput.Placeholder = fmt.Sprintf("Log for: %s", target.Description)
 			m.inputs.journalInput.Focus()
 			return m, nil, true
@@ -230,16 +229,19 @@ func (m DashboardModel) handleGoalDependencyPicker(key string) (DashboardModel, 
 	}
 	if m.validSprintIndex(m.view.focusedColIdx) && len(m.sprints[m.view.focusedColIdx].Goals) > m.view.focusedGoalIdx {
 		target := m.sprints[m.view.focusedColIdx].Goals[m.view.focusedGoalIdx]
-		m.modal.depPicking, m.modal.editingGoalID = true, target.ID
-		m.modal.depOptions = m.buildDepOptions(target.ID)
+		state := &DependencyState{
+			GoalID:  target.ID,
+			Options: m.buildDepOptions(target.ID),
+		}
 		deps, err := m.db.GetGoalDependencies(m.ctx, target.ID)
 		if err != nil {
 			m.setStatusError(fmt.Sprintf("Error loading dependencies: %v", err))
-			m.modal.depSelected = make(map[int64]bool)
+			state.Selected = make(map[int64]bool)
 		} else {
-			m.modal.depSelected = deps
+			state.Selected = deps
 		}
-		m.modal.depCursor = 0
+		state.Cursor = 0
+		m.modal.Open(state)
 		return m, nil, true
 	}
 	return m, nil, false
@@ -251,35 +253,40 @@ func (m DashboardModel) handleGoalRecurrencePicker(key string) (DashboardModel, 
 	}
 	if m.validSprintIndex(m.view.focusedColIdx) && len(m.sprints[m.view.focusedColIdx].Goals) > m.view.focusedGoalIdx {
 		target := m.sprints[m.view.focusedColIdx].Goals[m.view.focusedGoalIdx]
-		m.modal.settingRecurrence, m.modal.editingGoalID = true, target.ID
-		m.modal.recurrenceCursor = 0
-		m.modal.recurrenceMode = "none"
-		m.modal.recurrenceSelected = make(map[string]bool)
-		m.modal.recurrenceFocus = "mode"
-		m.modal.recurrenceItemCursor = 0
-		m.modal.recurrenceDayCursor = 0
+		state := &RecurrenceState{
+			GoalID:          target.ID,
+			Options:         m.modal.recurrenceOptions,
+			Mode:            "none",
+			WeekdayOptions:  m.modal.weekdayOptions,
+			MonthOptions:    m.modal.monthOptions,
+			Selected:        make(map[string]bool),
+			Focus:           "mode",
+			ItemCursor:      0,
+			DayCursor:       0,
+			MonthDayOptions: m.modal.monthDayOptions,
+		}
 		if target.RecurrenceRule != nil {
 			rule := strings.ToLower(strings.TrimSpace(*target.RecurrenceRule))
 			switch {
 			case rule == "daily":
-				m.modal.recurrenceMode = "daily"
+				state.Mode = "daily"
 			case strings.HasPrefix(rule, "weekly:"):
-				m.modal.recurrenceMode = "weekly"
+				state.Mode = "weekly"
 				parts := strings.Split(strings.TrimPrefix(rule, "weekly:"), ",")
 				for _, p := range parts {
 					p = strings.TrimSpace(p)
 					if p != "" {
-						m.modal.recurrenceSelected[p] = true
+						state.Selected[p] = true
 					}
 				}
-				for i, d := range m.modal.weekdayOptions {
-					if m.modal.recurrenceSelected[d] {
-						m.modal.recurrenceItemCursor = i
+				for i, d := range state.WeekdayOptions {
+					if state.Selected[d] {
+						state.ItemCursor = i
 						break
 					}
 				}
 			case strings.HasPrefix(rule, "monthly:"):
-				m.modal.recurrenceMode = "monthly"
+				state.Mode = "monthly"
 				payload := strings.TrimPrefix(rule, "monthly:")
 				var months []string
 				var days []string
@@ -300,7 +307,7 @@ func (m DashboardModel) handleGoalRecurrencePicker(key string) (DashboardModel, 
 				for _, mo := range months {
 					mo = strings.TrimSpace(mo)
 					if mo != "" {
-						m.modal.recurrenceSelected[mo] = true
+						state.Selected[mo] = true
 					}
 				}
 				if len(days) == 0 {
@@ -309,29 +316,30 @@ func (m DashboardModel) handleGoalRecurrencePicker(key string) (DashboardModel, 
 				for _, d := range days {
 					d = strings.TrimSpace(d)
 					if d != "" {
-						m.modal.recurrenceSelected["day:"+d] = true
+						state.Selected["day:"+d] = true
 					}
 				}
-				for i, mo := range m.modal.monthOptions {
-					if m.modal.recurrenceSelected[mo] {
-						m.modal.recurrenceItemCursor = i
+				for i, mo := range state.MonthOptions {
+					if state.Selected[mo] {
+						state.ItemCursor = i
 						break
 					}
 				}
-				for i, d := range m.modal.monthDayOptions {
-					if m.modal.recurrenceSelected["day:"+d] {
-						m.modal.recurrenceDayCursor = i
+				for i, d := range state.MonthDayOptions {
+					if state.Selected["day:"+d] {
+						state.DayCursor = i
 						break
 					}
 				}
 			}
 		}
-		for i, opt := range m.modal.recurrenceOptions {
-			if opt == m.modal.recurrenceMode {
-				m.modal.recurrenceCursor = i
+		for i, opt := range state.Options {
+			if opt == state.Mode {
+				state.Cursor = i
 				break
 			}
 		}
+		m.modal.Open(state)
 		return m, nil, true
 	}
 	return m, nil, false
@@ -343,15 +351,17 @@ func (m DashboardModel) handleGoalTagging(key string) (DashboardModel, tea.Cmd, 
 	}
 	if m.validSprintIndex(m.view.focusedColIdx) && m.view.focusedColIdx > 0 && len(m.sprints[m.view.focusedColIdx].Goals) > m.view.focusedGoalIdx {
 		target := m.sprints[m.view.focusedColIdx].Goals[m.view.focusedGoalIdx]
-		m.modal.tagging, m.modal.editingGoalID = true, target.ID
+		state := &TaggingState{
+			GoalID:   target.ID,
+			Selected: make(map[string]bool),
+		}
 		m.inputs.tagInput.Focus()
 		m.inputs.tagInput.SetValue("")
-		m.modal.tagSelected = make(map[string]bool)
 		var customTags []string
 		if target.Tags != nil {
 			for _, t := range util.JSONToTags(*target.Tags) {
 				if containsTag(m.modal.defaultTags, t) {
-					m.modal.tagSelected[t] = true
+					state.Selected[t] = true
 				} else {
 					customTags = append(customTags, t)
 				}
@@ -361,7 +371,8 @@ func (m DashboardModel) handleGoalTagging(key string) (DashboardModel, tea.Cmd, 
 			sort.Strings(customTags)
 			m.inputs.tagInput.SetValue(strings.Join(customTags, " "))
 		}
-		m.modal.tagCursor = 0
+		state.Cursor = 0
+		m.modal.Open(state)
 		return m, nil, true
 	}
 	return m, nil, false

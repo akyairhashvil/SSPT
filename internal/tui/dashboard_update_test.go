@@ -47,8 +47,8 @@ func TestDashboardKeyRoutingNewGoal(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected DashboardModel, got %T", model)
 	}
-	if !updated.modal.creatingGoal {
-		t.Fatalf("expected creatingGoal to be true")
+	if !updated.modal.Is(ModalGoalCreate) {
+		t.Fatalf("expected goal create modal to be open")
 	}
 }
 

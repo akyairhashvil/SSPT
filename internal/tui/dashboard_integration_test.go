@@ -47,8 +47,8 @@ func TestDashboardCreateGoalFlow(t *testing.T) {
 
 	model, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
 	m, _ = model.(DashboardModel)
-	if !m.modal.creatingGoal {
-		t.Fatalf("expected creatingGoal to be true")
+	if !m.modal.Is(ModalGoalCreate) {
+		t.Fatalf("expected goal create modal to be open")
 	}
 	m.inputs.textInput.SetValue("Test Goal")
 	model, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})

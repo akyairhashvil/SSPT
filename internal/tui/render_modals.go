@@ -137,71 +137,71 @@ func (m DashboardModel) renderJournalPane() string {
 			passWidth = 1
 		}
 		journalPane = passFrame.Width(passWidth).Render(passContent.String())
-	} else if m.modal.settingRecurrence {
+	} else if state, ok := m.modal.RecurrenceState(); ok {
 		var recContent strings.Builder
 		recContent.WriteString(m.theme.Focused.Render("Recurrence") + "\n")
 		recContent.WriteString(m.theme.Dim.Render("Tab next step | Space toggle | Enter save") + "\n\n")
 
-		if m.modal.recurrenceFocus == "mode" {
+		if state.Focus == "mode" {
 			recContent.WriteString(m.theme.Focused.Render("Frequency") + "\n")
-			for i, opt := range m.modal.recurrenceOptions {
+			for i, opt := range state.Options {
 				cursor := "  "
-				if i == m.modal.recurrenceCursor {
+				if i == state.Cursor {
 					cursor = "> "
 				}
 				marker := " "
-				if opt == m.modal.recurrenceMode {
+				if opt == state.Mode {
 					marker = "*"
 				}
 				recContent.WriteString(fmt.Sprintf("%s[%s] %s\n", cursor, marker, opt))
 			}
-		} else if m.modal.recurrenceMode == "weekly" {
+		} else if state.Mode == "weekly" {
 			recContent.WriteString(m.theme.Dim.Render("Frequency: weekly") + "\n\n")
 			recContent.WriteString(m.theme.Focused.Render("Weekdays") + "\n")
-			for i, d := range m.modal.weekdayOptions {
+			for i, d := range state.WeekdayOptions {
 				cursor := "  "
-				if m.modal.recurrenceFocus == "items" && i == m.modal.recurrenceItemCursor {
+				if state.Focus == "items" && i == state.ItemCursor {
 					cursor = "> "
 				}
 				check := "[ ]"
-				if m.modal.recurrenceSelected[d] {
+				if state.Selected[d] {
 					check = "[x]"
 				}
 				recContent.WriteString(fmt.Sprintf("%s%s %s\n", cursor, check, d))
 			}
-		} else if m.modal.recurrenceMode == "monthly" {
+		} else if state.Mode == "monthly" {
 			recContent.WriteString(m.theme.Dim.Render("Frequency: monthly") + "\n\n")
-			if m.modal.recurrenceFocus == "items" {
+			if state.Focus == "items" {
 				recContent.WriteString(m.theme.Focused.Render("Months") + "\n")
-				for i, mo := range m.modal.monthOptions {
+				for i, mo := range state.MonthOptions {
 					cursor := "  "
-					if m.modal.recurrenceFocus == "items" && i == m.modal.recurrenceItemCursor {
+					if state.Focus == "items" && i == state.ItemCursor {
 						cursor = "> "
 					}
 					check := "[ ]"
-					if m.modal.recurrenceSelected[mo] {
+					if state.Selected[mo] {
 						check = "[x]"
 					}
 					recContent.WriteString(fmt.Sprintf("%s%s %s\n", cursor, check, mo))
 				}
-			} else if m.modal.recurrenceFocus == "days" {
+			} else if state.Focus == "days" {
 				recContent.WriteString(m.theme.Focused.Render("Days") + "\n")
-				maxDay := m.monthlyMaxDay()
+				maxDay := m.monthlyMaxDay(state)
 				if maxDay <= 0 {
 					recContent.WriteString(m.theme.Dim.Render("  (select month(s) first)"))
 				} else {
-					if m.modal.recurrenceDayCursor > maxDay-1 {
-						m.modal.recurrenceDayCursor = maxDay - 1
+					if state.DayCursor > maxDay-1 {
+						state.DayCursor = maxDay - 1
 					}
 					var entries []string
 					for i := 0; i < maxDay; i++ {
-						d := m.modal.monthDayOptions[i]
+						d := state.MonthDayOptions[i]
 						cursor := "  "
-						if m.modal.recurrenceFocus == "days" && i == m.modal.recurrenceDayCursor {
+						if state.Focus == "days" && i == state.DayCursor {
 							cursor = "> "
 						}
 						check := "[ ]"
-						if m.modal.recurrenceSelected["day:"+d] {
+						if state.Selected["day:"+d] {
 							check = "[x]"
 						}
 						entries = append(entries, fmt.Sprintf("%s%s %2s", cursor, check, d))
@@ -238,11 +238,11 @@ func (m DashboardModel) renderJournalPane() string {
 			recWidth = 1
 		}
 		journalPane = recFrame.Width(recWidth).Render(recContent.String())
-	} else if m.modal.depPicking {
+	} else if state, ok := m.modal.DependencyState(); ok {
 		var depContent strings.Builder
 		depContent.WriteString(m.theme.Focused.Render("Dependencies") + "\n")
 		depContent.WriteString(m.theme.Dim.Render("Space to toggle, Enter to save") + "\n\n")
-		if len(m.modal.depOptions) == 0 {
+		if len(state.Options) == 0 {
 			depContent.WriteString(m.theme.Dim.Render("  (no tasks)\n"))
 		} else {
 			maxLines := m.height / 2
@@ -250,29 +250,29 @@ func (m DashboardModel) renderJournalPane() string {
 				maxLines = 6
 			}
 			start := 0
-			if m.modal.depCursor >= maxLines {
-				start = m.modal.depCursor - maxLines + 1
+			if state.Cursor >= maxLines {
+				start = state.Cursor - maxLines + 1
 			}
 			end := start + maxLines
-			if end > len(m.modal.depOptions) {
-				end = len(m.modal.depOptions)
+			if end > len(state.Options) {
+				end = len(state.Options)
 			}
 			if start > 0 {
 				depContent.WriteString(m.theme.Dim.Render("  ...\n"))
 			}
 			for i := start; i < end; i++ {
-				opt := m.modal.depOptions[i]
+				opt := state.Options[i]
 				cursor := "  "
-				if i == m.modal.depCursor {
+				if i == state.Cursor {
 					cursor = "> "
 				}
 				check := "[ ]"
-				if m.modal.depSelected[opt.ID] {
+				if state.Selected[opt.ID] {
 					check = "[x]"
 				}
 				depContent.WriteString(fmt.Sprintf("%s%s %s\n", cursor, check, opt.Label))
 			}
-			if end < len(m.modal.depOptions) {
+			if end < len(state.Options) {
 				depContent.WriteString(m.theme.Dim.Render("  ...\n"))
 			}
 		}
@@ -284,7 +284,7 @@ func (m DashboardModel) renderJournalPane() string {
 			depWidth = 1
 		}
 		journalPane = depFrame.Width(depWidth).Render(depContent.String())
-	} else if m.modal.themePicking {
+	} else if state, ok := m.modal.ThemeState(); ok {
 		var themeContent strings.Builder
 		themeContent.WriteString(m.theme.Focused.Render("Themes") + "\n")
 		themeContent.WriteString(m.theme.Dim.Render("Use ↑/↓ to select, Enter to apply") + "\n\n")
@@ -293,7 +293,7 @@ func (m DashboardModel) renderJournalPane() string {
 		} else {
 			for i, name := range m.modal.themeNames {
 				cursor := "  "
-				if i == m.modal.themeCursor {
+				if i == state.Cursor {
 					cursor = "> "
 				}
 				themeContent.WriteString(fmt.Sprintf("%s%s\n", cursor, name))
@@ -306,17 +306,17 @@ func (m DashboardModel) renderJournalPane() string {
 			themeWidth = 1
 		}
 		journalPane = themeFrame.Width(themeWidth).Render(themeContent.String())
-	} else if m.modal.tagging {
+	} else if state, ok := m.modal.TaggingState(); ok {
 		var tagContent strings.Builder
 		tagContent.WriteString(m.theme.Focused.Render("Tags") + "\n")
 		tagContent.WriteString(m.theme.Dim.Render("Use ↑/↓ to select, Tab to toggle, Enter to save") + "\n\n")
 		for i, tag := range m.modal.defaultTags {
 			cursor := "  "
-			if i == m.modal.tagCursor {
+			if i == state.Cursor {
 				cursor = "> "
 			}
 			check := "[ ]"
-			if m.modal.tagSelected[tag] {
+			if state.Selected[tag] {
 				check = "[x]"
 			}
 			tagContent.WriteString(fmt.Sprintf("%s%s %s\n", cursor, check, tag))
@@ -367,7 +367,7 @@ func (m DashboardModel) renderJournalPane() string {
 			journalWidth = 1
 		}
 		journalPane = journalFrame.Width(journalWidth).Render(searchContent.String())
-	} else if len(m.journalEntries) > 0 || m.modal.journaling {
+	} else if len(m.journalEntries) > 0 || m.modal.Is(ModalJournaling) {
 		var journalContent strings.Builder
 		journalContent.WriteString(m.theme.Focused.Render("Journal") + "\n\n")
 		start := len(m.journalEntries) - 3
@@ -398,7 +398,7 @@ func (m DashboardModel) renderJournalPane() string {
 				entry.Content)
 			journalContent.WriteString(line + "\n")
 		}
-		if m.modal.journaling {
+		if m.modal.Is(ModalJournaling) {
 			journalContent.WriteString("\n" + m.theme.Focused.Render("> ") + m.inputs.journalInput.View())
 		}
 		journalFrame := Frames.Modal.Padding(0, 1)

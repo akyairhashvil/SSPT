@@ -8,12 +8,13 @@ import (
 )
 
 func (m DashboardModel) handleModalConfirmTagging() (DashboardModel, tea.Cmd, bool) {
-	if !m.modal.tagging {
+	state, ok := m.modal.TaggingState()
+	if !ok {
 		return m, nil, false
 	}
 	raw := strings.Fields(m.inputs.tagInput.Value())
 	tags := make(map[string]bool)
-	for t, selected := range m.modal.tagSelected {
+	for t, selected := range state.Selected {
 		if selected {
 			tags[t] = true
 		}
@@ -30,41 +31,40 @@ func (m DashboardModel) handleModalConfirmTagging() (DashboardModel, tea.Cmd, bo
 	for t := range tags {
 		out = append(out, t)
 	}
-	if err := m.db.SetGoalTags(m.ctx, m.modal.editingGoalID, out); err != nil {
+	if err := m.db.SetGoalTags(m.ctx, state.GoalID, out); err != nil {
 		m.setStatusError(fmt.Sprintf("Error saving tags: %v", err))
 	} else {
 		m.invalidateGoalCache()
 		m.refreshData(m.day.ID)
 	}
-	m.modal.tagging, m.modal.editingGoalID = false, 0
+	m.modal.Close()
 	m.inputs.tagInput.Reset()
-	m.modal.tagSelected = make(map[string]bool)
-	m.modal.tagCursor = 0
 	return m, nil, true
 }
 
 func (m DashboardModel) handleModalInputTagging(msg tea.Msg) (DashboardModel, tea.Cmd, bool) {
 	var cmd tea.Cmd
-	if !m.modal.tagging {
+	state, ok := m.modal.TaggingState()
+	if !ok {
 		return m, nil, false
 	}
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "up", "k":
-			if m.modal.tagCursor > 0 {
-				m.modal.tagCursor--
+			if state.Cursor > 0 {
+				state.Cursor--
 			}
 			return m, nil, true
 		case "down", "j":
-			if m.modal.tagCursor < len(m.modal.defaultTags)-1 {
-				m.modal.tagCursor++
+			if state.Cursor < len(m.modal.defaultTags)-1 {
+				state.Cursor++
 			}
 			return m, nil, true
 		case "tab":
-			if len(m.modal.defaultTags) > 0 && m.modal.tagCursor < len(m.modal.defaultTags) {
-				tag := m.modal.defaultTags[m.modal.tagCursor]
-				m.modal.tagSelected[tag] = !m.modal.tagSelected[tag]
+			if len(m.modal.defaultTags) > 0 && state.Cursor < len(m.modal.defaultTags) {
+				tag := m.modal.defaultTags[state.Cursor]
+				state.Selected[tag] = !state.Selected[tag]
 			}
 			return m, nil, true
 		}

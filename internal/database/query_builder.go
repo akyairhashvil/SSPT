@@ -8,7 +8,7 @@ import (
 type GoalQuery struct {
 	columns string
 	filters []string
-	args    []interface{}
+	args    []any
 	orderBy string
 	limit   int
 }
@@ -17,7 +17,7 @@ func NewGoalQuery() *GoalQuery {
 	return &GoalQuery{columns: goalColumnsWithSprint}
 }
 
-func (q *GoalQuery) Where(filter string, args ...interface{}) *GoalQuery {
+func (q *GoalQuery) Where(filter string, args ...any) *GoalQuery {
 	q.filters = append(q.filters, filter)
 	q.args = append(q.args, args...)
 	return q
@@ -45,7 +45,7 @@ func (q *GoalQuery) Limit(limit int) *GoalQuery {
 	return q
 }
 
-func (q *GoalQuery) Build() (string, []interface{}) {
+func (q *GoalQuery) Build() (string, []any) {
 	query := fmt.Sprintf("SELECT %s FROM goals", q.columns)
 	if len(q.filters) > 0 {
 		query += " WHERE " + strings.Join(q.filters, " AND ")

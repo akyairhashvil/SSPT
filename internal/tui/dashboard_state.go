@@ -24,109 +24,107 @@ func newViewState() *ViewState {
 
 // ModalManager tracks modal-related UI state and selections.
 type ModalManager struct {
-	creatingGoal         bool
-	editingGoal          bool
-	editingGoalID        int64
-	movingGoal           bool
-	creatingWorkspace    bool
-	initializingSprints  bool
-	pendingWorkspaceID   int64
-	tagging              bool
-	tagCursor            int
-	tagSelected          map[string]bool
-	defaultTags          []string
-	themeOrder           []string
-	themePicking         bool
-	themeCursor          int
-	themeNames           []string
-	depPicking           bool
-	depCursor            int
-	depOptions           []depOption
-	depSelected          map[int64]bool
-	settingRecurrence    bool
-	recurrenceOptions    []string
-	recurrenceCursor     int
-	recurrenceMode       string
-	weekdayOptions       []string
-	monthOptions         []string
-	recurrenceSelected   map[string]bool
-	recurrenceFocus      string
-	recurrenceItemCursor int
-	recurrenceDayCursor  int
-	monthDayOptions      []string
-	confirmingDelete     bool
-	confirmDeleteGoalID  int64
-	journaling           bool
+	current           ModalState
+	defaultTags       []string
+	themeOrder        []string
+	themeNames        []string
+	recurrenceOptions []string
+	weekdayOptions    []string
+	monthOptions      []string
+	monthDayOptions   []string
 }
 
-type ModalType string
-
-const (
-	ModalNone              ModalType = "none"
-	ModalCreatingGoal      ModalType = "creating_goal"
-	ModalEditingGoal       ModalType = "editing_goal"
-	ModalMovingGoal        ModalType = "moving_goal"
-	ModalCreatingWorkspace ModalType = "creating_workspace"
-	ModalInitializing      ModalType = "initializing_sprints"
-	ModalTagging           ModalType = "tagging"
-	ModalThemePicking      ModalType = "theme_picking"
-	ModalDependency        ModalType = "dependency"
-	ModalRecurrence        ModalType = "recurrence"
-	ModalConfirmDelete     ModalType = "confirm_delete"
-	ModalJournaling        ModalType = "journaling"
-)
-
 func newModalManager() *ModalManager {
-	return &ModalManager{
-		tagSelected:        make(map[string]bool),
-		depSelected:        make(map[int64]bool),
-		recurrenceSelected: make(map[string]bool),
-	}
+	return &ModalManager{}
 }
 
 func (m *ModalManager) InInputMode(security *SecurityManager, search SearchManager) bool {
-	return security.changingPassphrase ||
-		m.confirmingDelete ||
-		security.confirmingClearDB ||
-		m.creatingGoal ||
-		m.editingGoal ||
-		m.journaling ||
-		search.Active ||
-		m.creatingWorkspace ||
-		m.initializingSprints ||
-		m.tagging ||
-		m.themePicking ||
-		m.depPicking ||
-		m.settingRecurrence
+	if security.changingPassphrase || security.confirmingClearDB || search.Active {
+		return true
+	}
+	return m.current != nil && m.current.Type() != ModalGoalMove
 }
 
 func (m *ModalManager) ActiveModal() ModalType {
-	switch {
-	case m.creatingGoal:
-		return ModalCreatingGoal
-	case m.editingGoal:
-		return ModalEditingGoal
-	case m.movingGoal:
-		return ModalMovingGoal
-	case m.creatingWorkspace:
-		return ModalCreatingWorkspace
-	case m.initializingSprints:
-		return ModalInitializing
-	case m.tagging:
-		return ModalTagging
-	case m.themePicking:
-		return ModalThemePicking
-	case m.depPicking:
-		return ModalDependency
-	case m.settingRecurrence:
-		return ModalRecurrence
-	case m.confirmingDelete:
-		return ModalConfirmDelete
-	case m.journaling:
-		return ModalJournaling
-	default:
+	if m.current == nil {
 		return ModalNone
 	}
+	return m.current.Type()
+}
+
+func (m *ModalManager) IsOpen() bool {
+	return m.current != nil
+}
+
+func (m *ModalManager) Current() ModalState {
+	return m.current
+}
+
+func (m *ModalManager) Open(state ModalState) {
+	m.current = state
+}
+
+func (m *ModalManager) Close() {
+	m.current = nil
+}
+
+func (m *ModalManager) Is(t ModalType) bool {
+	return m.current != nil && m.current.Type() == t
+}
+
+func (m *ModalManager) GoalCreateState() (*GoalCreateState, bool) {
+	state, ok := m.current.(*GoalCreateState)
+	return state, ok
+}
+
+func (m *ModalManager) GoalEditState() (*GoalEditState, bool) {
+	state, ok := m.current.(*GoalEditState)
+	return state, ok
+}
+
+func (m *ModalManager) GoalDeleteState() (*GoalDeleteState, bool) {
+	state, ok := m.current.(*GoalDeleteState)
+	return state, ok
+}
+
+func (m *ModalManager) GoalMoveState() (*GoalMoveState, bool) {
+	state, ok := m.current.(*GoalMoveState)
+	return state, ok
+}
+
+func (m *ModalManager) WorkspaceCreateState() (*WorkspaceCreateState, bool) {
+	state, ok := m.current.(*WorkspaceCreateState)
+	return state, ok
+}
+
+func (m *ModalManager) WorkspaceInitState() (*WorkspaceInitState, bool) {
+	state, ok := m.current.(*WorkspaceInitState)
+	return state, ok
+}
+
+func (m *ModalManager) TaggingState() (*TaggingState, bool) {
+	state, ok := m.current.(*TaggingState)
+	return state, ok
+}
+
+func (m *ModalManager) ThemeState() (*ThemeState, bool) {
+	state, ok := m.current.(*ThemeState)
+	return state, ok
+}
+
+func (m *ModalManager) DependencyState() (*DependencyState, bool) {
+	state, ok := m.current.(*DependencyState)
+	return state, ok
+}
+
+func (m *ModalManager) RecurrenceState() (*RecurrenceState, bool) {
+	state, ok := m.current.(*RecurrenceState)
+	return state, ok
+}
+
+func (m *ModalManager) JournalState() (*JournalState, bool) {
+	state, ok := m.current.(*JournalState)
+	return state, ok
 }
 
 // InputState stores all text input models.

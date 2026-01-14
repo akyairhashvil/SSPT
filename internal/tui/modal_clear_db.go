@@ -58,8 +58,7 @@ func (m DashboardModel) handleModalConfirmClearDB() (DashboardModel, tea.Cmd, bo
 			m.setStatusError(fmt.Sprintf("Error loading workspaces: %v", err))
 		} else {
 			m.activeWorkspaceIdx = 0
-			m.modal.pendingWorkspaceID = wsID
-			m.modal.initializingSprints = true
+			m.modal.Open(&WorkspaceInitState{WorkspaceID: wsID})
 			m.inputs.textInput.Placeholder = "How many sprints? (1-8)"
 			m.inputs.textInput.Reset()
 			m.inputs.textInput.Focus()
@@ -94,8 +93,7 @@ func (m DashboardModel) handleModalInputClearDB(msg tea.Msg) (DashboardModel, te
 					m.setStatusError(fmt.Sprintf("Error loading workspaces: %v", err))
 				} else {
 					m.activeWorkspaceIdx = 0
-					m.modal.pendingWorkspaceID = wsID
-					m.modal.initializingSprints = true
+					m.modal.Open(&WorkspaceInitState{WorkspaceID: wsID})
 					m.inputs.textInput.Placeholder = "How many sprints? (1-8)"
 					m.inputs.textInput.Reset()
 					m.inputs.textInput.Focus()

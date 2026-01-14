@@ -120,14 +120,15 @@ func TestHandleGoalTagging(t *testing.T) {
 	if !handled {
 		t.Fatalf("expected tagging handler to handle")
 	}
-	if !next.modal.tagging {
+	if !next.modal.Is(ModalTagging) {
 		t.Fatalf("expected tagging modal to open")
 	}
 	if next.inputs.tagInput.Focused() == false {
 		t.Fatalf("expected tag input to be focused")
 	}
-	if next.modal.editingGoalID == 0 {
-		t.Fatalf("expected editing goal id to be set")
+	state, ok := next.modal.TaggingState()
+	if !ok || state.GoalID == 0 {
+		t.Fatalf("expected goal id to be set")
 	}
 	if next.sprints[next.view.focusedColIdx].Goals[next.view.focusedGoalIdx].Status == models.GoalStatusCompleted {
 		t.Fatalf("expected pending goal")

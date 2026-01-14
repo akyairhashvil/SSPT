@@ -9,51 +9,50 @@ import (
 )
 
 func (m DashboardModel) handleModalConfirmDelete() (DashboardModel, tea.Cmd, bool) {
-	if !m.modal.confirmingDelete {
+	state, ok := m.modal.GoalDeleteState()
+	if !ok {
 		return m, nil, false
 	}
-	if m.modal.confirmDeleteGoalID > 0 {
-		if err := m.db.DeleteGoal(m.ctx, m.modal.confirmDeleteGoalID); err != nil {
+	if state.GoalID > 0 {
+		if err := m.db.DeleteGoal(m.ctx, state.GoalID); err != nil {
 			m.setStatusError(fmt.Sprintf("Error deleting goal: %v", err))
 		} else {
 			m.invalidateGoalCache()
 			m.refreshData(m.day.ID)
 		}
 	}
-	m.modal.confirmingDelete = false
-	m.modal.confirmDeleteGoalID = 0
+	m.modal.Close()
 	return m, nil, true
 }
 
 func (m DashboardModel) handleModalInputConfirmDelete(msg tea.Msg) (DashboardModel, tea.Cmd, bool) {
-	if !m.modal.confirmingDelete {
+	state, ok := m.modal.GoalDeleteState()
+	if !ok {
 		return m, nil, false
 	}
 	if keyMsg, ok := msg.(tea.KeyMsg); ok {
 		switch keyMsg.String() {
 		case "a":
-			if m.modal.confirmDeleteGoalID > 0 {
-				if err := m.db.ArchiveGoal(m.ctx, m.modal.confirmDeleteGoalID); err != nil {
+			if state.GoalID > 0 {
+				if err := m.db.ArchiveGoal(m.ctx, state.GoalID); err != nil {
 					m.setStatusError(fmt.Sprintf("Error archiving goal: %v", err))
 				} else {
 					m.invalidateGoalCache()
 					m.refreshData(m.day.ID)
 				}
 			}
-			m.modal.confirmingDelete = false
-			m.modal.confirmDeleteGoalID = 0
+			m.modal.Close()
 			return m, nil, true
 		case "d", "backspace":
-			if m.modal.confirmDeleteGoalID > 0 {
-				if err := m.db.DeleteGoal(m.ctx, m.modal.confirmDeleteGoalID); err != nil {
+			if state.GoalID > 0 {
+				if err := m.db.DeleteGoal(m.ctx, state.GoalID); err != nil {
 					m.setStatusError(fmt.Sprintf("Error deleting goal: %v", err))
 				} else {
 					m.invalidateGoalCache()
 					m.refreshData(m.day.ID)
 				}
 			}
-			m.modal.confirmingDelete = false
-			m.modal.confirmDeleteGoalID = 0
+			m.modal.Close()
 			return m, nil, true
 		}
 	}
@@ -61,7 +60,8 @@ func (m DashboardModel) handleModalInputConfirmDelete(msg tea.Msg) (DashboardMod
 }
 
 func (m DashboardModel) handleModalConfirmJournaling() (DashboardModel, tea.Cmd, bool) {
-	if !m.modal.journaling {
+	state, ok := m.modal.JournalState()
+	if !ok {
 		return m, nil, false
 	}
 	text := m.inputs.journalInput.Value()
@@ -71,8 +71,8 @@ func (m DashboardModel) handleModalConfirmJournaling() (DashboardModel, tea.Cmd,
 			id := m.timer.ActiveSprint.ID
 			sID = &id
 		}
-		if m.modal.editingGoalID > 0 {
-			id := m.modal.editingGoalID
+		if state.GoalID > 0 {
+			id := state.GoalID
 			gID = &id
 		}
 		activeWS := m.workspaces[m.activeWorkspaceIdx]
@@ -82,14 +82,14 @@ func (m DashboardModel) handleModalConfirmJournaling() (DashboardModel, tea.Cmd,
 			m.refreshData(m.day.ID)
 		}
 	}
-	m.modal.journaling, m.modal.editingGoalID = false, 0
+	m.modal.Close()
 	m.inputs.journalInput.Reset()
 	return m, nil, true
 }
 
 func (m DashboardModel) handleModalInputJournaling(msg tea.Msg) (DashboardModel, tea.Cmd, bool) {
 	var cmd tea.Cmd
-	if !m.modal.journaling {
+	if !m.modal.Is(ModalJournaling) {
 		return m, nil, false
 	}
 	m.inputs.journalInput, cmd = m.inputs.journalInput.Update(msg)
@@ -97,37 +97,38 @@ func (m DashboardModel) handleModalInputJournaling(msg tea.Msg) (DashboardModel,
 }
 
 func (m DashboardModel) handleModalConfirmWorkspaceCreate() (DashboardModel, tea.Cmd, bool) {
-	if !m.modal.creatingWorkspace {
+	if !m.modal.Is(ModalWorkspaceCreate) {
 		return m, nil, false
 	}
 	name := m.inputs.textInput.Value()
 	if name != "" {
 		newID, err := m.db.CreateWorkspace(m.ctx, name, strings.ToLower(name))
 		if err == nil {
-			m.modal.pendingWorkspaceID, m.modal.creatingWorkspace, m.modal.initializingSprints = newID, false, true
+			m.modal.Open(&WorkspaceInitState{WorkspaceID: newID})
 			m.inputs.textInput.Placeholder = "How many sprints?"
 			m.inputs.textInput.Reset()
 		} else {
 			m.err = err
-			m.modal.creatingWorkspace = false
+			m.modal.Close()
 		}
 	}
 	return m, nil, true
 }
 
 func (m DashboardModel) handleModalConfirmInitializeSprints() (DashboardModel, tea.Cmd, bool) {
-	if !m.modal.initializingSprints {
+	state, ok := m.modal.WorkspaceInitState()
+	if !ok {
 		return m, nil, false
 	}
 	val := m.inputs.textInput.Value()
 	if num, err := strconv.Atoi(val); err == nil && num > 0 && num <= 8 {
-		if err := m.db.BootstrapDay(m.ctx, m.modal.pendingWorkspaceID, num); err != nil {
+		if err := m.db.BootstrapDay(m.ctx, state.WorkspaceID, num); err != nil {
 			m.setStatusError(fmt.Sprintf("Error creating sprints: %v", err))
 		} else if err := m.loadWorkspaces(); err != nil {
 			m.setStatusError(fmt.Sprintf("Error loading workspaces: %v", err))
 		} else {
 			for i, ws := range m.workspaces {
-				if ws.ID == m.modal.pendingWorkspaceID {
+				if ws.ID == state.WorkspaceID {
 					m.activeWorkspaceIdx = i
 					break
 				}
@@ -140,43 +141,51 @@ func (m DashboardModel) handleModalConfirmInitializeSprints() (DashboardModel, t
 			}
 		}
 	}
-	m.modal.initializingSprints, m.modal.pendingWorkspaceID = false, 0
+	m.modal.Close()
 	m.inputs.textInput.Reset()
 	return m, nil, true
 }
 
 func (m DashboardModel) handleModalConfirmGoalEdit() (DashboardModel, tea.Cmd, bool) {
-	if !(m.modal.creatingGoal || m.modal.editingGoal || m.modal.editingGoalID > 0) {
-		return m, nil, false
-	}
 	text := m.inputs.textInput.Value()
-	if text != "" {
-		if m.modal.editingGoal {
-			if err := m.db.EditGoal(m.ctx, m.modal.editingGoalID, text); err != nil {
+	if state, ok := m.modal.GoalEditState(); ok {
+		if text != "" {
+			if err := m.db.EditGoal(m.ctx, state.GoalID, text); err != nil {
 				m.setStatusError(fmt.Sprintf("Error updating goal: %v", err))
 			}
-		} else if m.modal.editingGoalID > 0 {
-			if err := m.db.AddSubtask(m.ctx, text, m.modal.editingGoalID); err != nil {
-				m.setStatusError(fmt.Sprintf("Error adding subtask: %v", err))
-			} else {
-				m.view.expandedState[m.modal.editingGoalID] = true
-			}
-		} else {
-			if err := m.db.AddGoal(m.ctx, m.workspaces[m.activeWorkspaceIdx].ID, text, m.sprints[m.view.focusedColIdx].ID); err != nil {
-				m.setStatusError(fmt.Sprintf("Error adding goal: %v", err))
-			}
+			m.invalidateGoalCache()
+			m.refreshData(m.day.ID)
 		}
-		m.invalidateGoalCache()
-		m.refreshData(m.day.ID)
+		m.modal.Close()
+		m.inputs.textInput.Reset()
+		return m, nil, true
 	}
-	m.modal.creatingGoal, m.modal.editingGoal, m.modal.editingGoalID = false, false, 0
-	m.inputs.textInput.Reset()
-	return m, nil, true
+	if state, ok := m.modal.GoalCreateState(); ok {
+		if text != "" {
+			if state.ParentID > 0 {
+				if err := m.db.AddSubtask(m.ctx, text, state.ParentID); err != nil {
+					m.setStatusError(fmt.Sprintf("Error adding subtask: %v", err))
+				} else {
+					m.view.expandedState[state.ParentID] = true
+				}
+			} else {
+				if err := m.db.AddGoal(m.ctx, m.workspaces[m.activeWorkspaceIdx].ID, text, m.sprints[m.view.focusedColIdx].ID); err != nil {
+					m.setStatusError(fmt.Sprintf("Error adding goal: %v", err))
+				}
+			}
+			m.invalidateGoalCache()
+			m.refreshData(m.day.ID)
+		}
+		m.modal.Close()
+		m.inputs.textInput.Reset()
+		return m, nil, true
+	}
+	return m, nil, false
 }
 
 func (m DashboardModel) handleModalInputGoalText(msg tea.Msg) (DashboardModel, tea.Cmd, bool) {
 	var cmd tea.Cmd
-	if m.modal.creatingGoal || m.modal.editingGoal || m.modal.editingGoalID > 0 || m.modal.creatingWorkspace || m.modal.initializingSprints {
+	if m.modal.Is(ModalGoalCreate) || m.modal.Is(ModalGoalEdit) || m.modal.Is(ModalWorkspaceCreate) || m.modal.Is(ModalWorkspaceInit) {
 		m.inputs.textInput, cmd = m.inputs.textInput.Update(msg)
 		return m, cmd, true
 	}

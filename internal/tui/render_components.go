@@ -52,7 +52,7 @@ func (m DashboardModel) renderHeader() string {
 		if rem < 0 {
 			rem = 0
 		}
-		timerContent = fmt.Sprintf("☕ BREAK TIME: %02d:%02d REMAINING", int(rem.Minutes()), int(rem.Seconds())%60)
+		timerContent = fmt.Sprintf("☕ BREAK TIME: %s REMAINING", FormatTimeRemaining(rem))
 		timerColor = m.theme.Break
 	} else if m.timer.ActiveSprint != nil {
 		startedAt := time.Now()
@@ -64,7 +64,7 @@ func (m DashboardModel) renderHeader() string {
 		if rem < 0 {
 			rem = 0
 		}
-		timeStr := fmt.Sprintf("%02d:%02d", int(rem.Minutes()), int(rem.Seconds())%60)
+		timeStr := FormatTimeRemaining(rem)
 		barView := m.progress.ViewAs(float64(elapsed) / float64(config.SprintDuration))
 		timerContent = fmt.Sprintf("ACTIVE SPRINT: %d  |  %s  |  %s remaining", m.timer.ActiveSprint.SprintNumber, barView, timeStr)
 		timerColor = m.theme.Focused
@@ -86,7 +86,7 @@ func (m DashboardModel) renderHeader() string {
 			if target.Status == models.StatusPaused {
 				elapsed := time.Duration(target.ElapsedSeconds) * time.Second
 				rem := config.SprintDuration - elapsed
-				timeStr := fmt.Sprintf("%02d:%02d", int(rem.Minutes()), int(rem.Seconds())%60)
+				timeStr := FormatTimeRemaining(rem)
 				timerContent = fmt.Sprintf("PAUSED SPRINT: %d  |  %s remaining  |  [s] to Resume", target.SprintNumber, timeStr)
 				timerColor = m.theme.Break
 			}
@@ -146,17 +146,17 @@ func (m DashboardModel) renderFooter() string {
 		footerContent = statusStyle.Render(m.statusMessage)
 	} else if m.Message != "" {
 		footerContent = m.theme.Break.Foreground(lipgloss.Color("208")).Render(m.Message)
-	} else if m.modal.creatingGoal || m.modal.editingGoal || m.modal.creatingWorkspace || m.modal.initializingSprints {
+	} else if m.modal.Is(ModalGoalCreate) || m.modal.Is(ModalGoalEdit) || m.modal.Is(ModalWorkspaceCreate) || m.modal.Is(ModalWorkspaceInit) {
 		footerContent = m.theme.Input.Render(m.inputs.textInput.View())
-	} else if m.modal.tagging {
+	} else if m.modal.Is(ModalTagging) {
 		footerContent = m.theme.Dim.Render("[Tab] Toggle Tag | [Enter] Save | [Esc] Cancel")
-	} else if m.modal.themePicking {
+	} else if m.modal.Is(ModalTheme) {
 		footerContent = m.theme.Dim.Render("[Enter] Apply Theme | [Esc] Cancel")
-	} else if m.modal.depPicking {
+	} else if m.modal.Is(ModalDependency) {
 		footerContent = m.theme.Dim.Render("[Space] Toggle | [Enter] Save | [Esc] Cancel")
-	} else if m.modal.settingRecurrence {
+	} else if m.modal.Is(ModalRecurrence) {
 		footerContent = m.theme.Dim.Render("[Tab] Next | [Space] Toggle | [Enter] Save | [Esc] Cancel")
-	} else if m.modal.confirmingDelete {
+	} else if m.modal.Is(ModalGoalDelete) {
 		footerContent = m.theme.Focused.Render("Delete task? [d] Delete | [a] Archive | [Esc] Cancel")
 	} else if m.security.confirmingClearDB {
 		var lines []string
@@ -173,20 +173,27 @@ func (m DashboardModel) renderFooter() string {
 		footerContent = lipgloss.JoinVertical(lipgloss.Left, lines...)
 	} else if m.security.changingPassphrase {
 		footerContent = m.theme.Dim.Render("[Enter] Next | [Esc] Cancel")
-	} else if m.modal.journaling {
+	} else if m.modal.Is(ModalJournaling) {
 		// Only render journaling input in the journal pane, avoid duplicate
 		footerContent = m.theme.Dim.Render("[Enter] to Save Log | [Esc] Cancel")
-	} else if m.modal.movingGoal {
+	} else if m.modal.Is(ModalGoalMove) {
 		footerContent = m.theme.Focused.Render("MOVE TO: [0] Backlog | [1-8] Sprint # | [Esc] Cancel")
 	} else {
-		baseHelp := "[n]New|[N]Sub|[e]Edit|[z]Toggle|[T]Task|[P]Priority|[+/-]Sprint|[w]Cycle|[W]New WS|[t]Tag|[m]Move|[D]Deps|[R]Repeat|[/]Search|[J]Journal|[I]Import|[G]Graph|[p]Passphrase|[d]Delete|[A]Archive|[u]Unarchive|[L]Lock|[C]Clear DB|[b]Backlog|[c]Completed|[a]Archived|[v]View|[Y]Theme"
+		baseHelp := normalModeRegistry.HelpForView(m.viewMode)
 		var timerHelp string
 		if m.timer.ActiveSprint != nil {
 			timerHelp = "|[s]PAUSE|[x]STOP"
 		} else {
 			timerHelp = "|[s]Start"
 		}
-		fullHelp := baseHelp + timerHelp + "|[ctrl+e]Export|[ctrl+r]Report|[q]Quit"
+		fullHelp := baseHelp
+		if timerHelp != "" {
+			if fullHelp != "" {
+				fullHelp += timerHelp
+			} else {
+				fullHelp = strings.TrimPrefix(timerHelp, "|")
+			}
+		}
 		rawFooter = fullHelp
 		footerContent = m.theme.Dim.Render(fullHelp)
 	}
@@ -202,7 +209,7 @@ func (m DashboardModel) renderFooter() string {
 		content := footerContent
 		if hasStatusMessage || m.Message != "" {
 			content = lipgloss.PlaceHorizontal(innerWidth, lipgloss.Center, footerContent)
-		} else if !m.modal.creatingGoal && !m.modal.editingGoal && !m.modal.creatingWorkspace && !m.modal.initializingSprints && !m.modal.tagging && !m.modal.themePicking && !m.modal.depPicking && !m.modal.settingRecurrence && !m.modal.confirmingDelete && !m.security.confirmingClearDB && !m.security.changingPassphrase {
+		} else if !m.modal.IsOpen() && !m.security.confirmingClearDB && !m.security.changingPassphrase {
 			tokens := strings.Split(rawFooter, "|")
 			const sep = " | "
 			sepWidth := ansi.StringWidth(sep)
@@ -270,11 +277,13 @@ func (m DashboardModel) renderFooter() string {
 				}
 				content = lipgloss.JoinVertical(lipgloss.Left, footerHelpLines...)
 			}
-		} else if !m.modal.confirmingDelete && !m.security.confirmingClearDB && !m.security.changingPassphrase && (m.modal.creatingGoal || m.modal.editingGoal || m.modal.creatingWorkspace || m.modal.initializingSprints || m.modal.tagging || m.modal.themePicking || m.modal.depPicking || m.modal.settingRecurrence) {
+		} else if !m.modal.Is(ModalGoalDelete) && !m.security.confirmingClearDB && !m.security.changingPassphrase &&
+			(m.modal.Is(ModalGoalCreate) || m.modal.Is(ModalGoalEdit) || m.modal.Is(ModalWorkspaceCreate) || m.modal.Is(ModalWorkspaceInit) ||
+				m.modal.Is(ModalTagging) || m.modal.Is(ModalTheme) || m.modal.Is(ModalDependency) || m.modal.Is(ModalRecurrence)) {
 			content = footerContent
 		} else if m.security.changingPassphrase {
 			content = lipgloss.PlaceHorizontal(innerWidth, lipgloss.Center, footerContent)
-		} else if m.modal.confirmingDelete {
+		} else if m.modal.Is(ModalGoalDelete) {
 			content = lipgloss.PlaceHorizontal(innerWidth, lipgloss.Center, footerContent)
 		} else if m.security.confirmingClearDB {
 			content = footerContent

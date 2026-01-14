@@ -1,9 +1,14 @@
 package database
 
 import (
+	"context"
+	"database/sql"
 	"encoding/json"
+	"fmt"
+	"reflect"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/akyairhashvil/SSPT/internal/models"
 	"github.com/akyairhashvil/SSPT/internal/util"
@@ -47,7 +52,17 @@ func scanGoalWithSprint(row interface{ Scan(...interface{}) error }) (models.Goa
 	return g, nil
 }
 
-func normalizeSeed(seed GoalSeed) (string, int, string, []string, string, string, []string) {
+type NormalizedGoal struct {
+	Description string
+	Priority    int
+	Effort      string
+	Tags        []string
+	Recurrence  string
+	Notes       string
+	Links       []string
+}
+
+func normalizeSeed(seed GoalSeed) NormalizedGoal {
 	desc := strings.TrimSpace(seed.Description)
 	priority := normalizePriority(seed.Priority)
 	effort := normalizeEffort(seed.Effort)
@@ -59,7 +74,15 @@ func normalizeSeed(seed GoalSeed) (string, int, string, []string, string, string
 	}
 	tags = normalizeTagsFromSlice(tags)
 	links := normalizeLinksFromSlice(seed.Links)
-	return desc, priority, effort, tags, recurrence, notes, links
+	return NormalizedGoal{
+		Description: desc,
+		Priority:    priority,
+		Effort:      effort,
+		Tags:        tags,
+		Recurrence:  recurrence,
+		Notes:       notes,
+		Links:       links,
+	}
 }
 
 func normalizePriority(priority int) int {
@@ -117,15 +140,15 @@ func normalizeLinksFromSlice(links []string) []string {
 	return out
 }
 
-func normalizeLinks(linksJSON string) []string {
+func normalizeLinks(linksJSON string) ([]string, error) {
 	if strings.TrimSpace(linksJSON) == "" || linksJSON == "[]" {
-		return nil
+		return nil, nil
 	}
 	var links []string
 	if err := json.Unmarshal([]byte(linksJSON), &links); err != nil {
-		return nil
+		return nil, err
 	}
-	return normalizeLinksFromSlice(links)
+	return normalizeLinksFromSlice(links), nil
 }
 
 func equalStringSlices(a, b []string) bool {
@@ -148,4 +171,628 @@ type GoalSeed struct {
 	Notes       string   `json:"notes,omitempty"`
 	Recurrence  string   `json:"recurrence,omitempty"`
 	Links       []string `json:"links,omitempty"`
+}
+
+// AddGoal inserts a new goal into the database.
+func (d *Database) AddGoal(ctx context.Context, workspaceID int64, description string, sprintID int64) error {
+	return d.withDBContext(ctx, func(ctx context.Context) error {
+		var maxRank int
+		var err error
+		if sprintID > 0 {
+			maxRank, err = d.getMaxGoalRank(ctx, sprintID)
+		} else {
+			maxRank, err = d.getMaxBacklogRank(ctx, workspaceID)
+		}
+		if err != nil {
+			return wrapErr(EntityGoal, "add", 0, err)
+		}
+
+		tags := util.TagsToJSON(util.ExtractTags(description))
+		query := `INSERT INTO goals (workspace_id, description, sprint_id, status, rank, tags) VALUES (?, ?, ?, 'pending', ?, ?)`
+
+		sprintIDArg := nullableInt64(sprintID)
+
+		_, err = d.DB.ExecContext(ctx, query, workspaceID, description, sprintIDArg, maxRank+1, tags)
+		return wrapErr(EntityGoal, "add", 0, err)
+	})
+}
+
+func (d *Database) UpdateGoalPriority(ctx context.Context, goalID int64, priority int) error {
+	return d.withDBContext(ctx, func(ctx context.Context) error {
+		if priority < 1 {
+			priority = 1
+		}
+		if priority > 5 {
+			priority = 5
+		}
+		_, err := d.DB.ExecContext(ctx, "UPDATE goals SET priority = ? WHERE id = ?", priority, goalID)
+		return wrapErr(EntityGoal, "update priority", goalID, err)
+	})
+}
+
+func (d *Database) AddGoalDetailed(ctx context.Context, workspaceID int64, sprintID int64, seed GoalSeed) error {
+	return d.withDBContext(ctx, func(ctx context.Context) error {
+		seed.Description = strings.TrimSpace(seed.Description)
+		if seed.Description == "" {
+			return nil
+		}
+
+		var maxRank int
+		var err error
+		if sprintID > 0 {
+			maxRank, err = d.getMaxGoalRank(ctx, sprintID)
+		} else {
+			maxRank, err = d.getMaxBacklogRank(ctx, workspaceID)
+		}
+		if err != nil {
+			return wrapErr(EntityGoal, "add detailed", 0, err)
+		}
+
+		tags := seed.Tags
+		if len(tags) == 0 {
+			tags = util.ExtractTags(seed.Description)
+		}
+		priority := normalizePriority(seed.Priority)
+		effort := normalizeEffort(seed.Effort)
+		tagsJSON := util.TagsToJSON(normalizeTagsFromSlice(tags))
+		linksJSON, err := json.Marshal(seed.Links)
+		if err != nil {
+			return wrapErr(EntityGoal, "add detailed", 0, err)
+		}
+
+		sprintIDArg := nullableInt64(sprintID)
+		notesArg := nullableStringIf(seed.Notes)
+		recurrenceArg := nullableStringIf(seed.Recurrence)
+
+		_, err = d.DB.ExecContext(ctx, `INSERT INTO goals (workspace_id, description, sprint_id, status, rank, tags, priority, effort, notes, recurrence_rule, links)
+			VALUES (?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?)`,
+			workspaceID, seed.Description, sprintIDArg, maxRank+1, tagsJSON, priority, effort, notesArg, recurrenceArg, string(linksJSON))
+		return wrapErr(EntityGoal, "add detailed", 0, err)
+	})
+}
+
+// AddSubtask inserts a new subtask linked to a parent goal.
+func (d *Database) AddSubtask(ctx context.Context, description string, parentID int64) error {
+	return d.withDBContext(ctx, func(ctx context.Context) error {
+		var sprintID *int64
+		var workspaceID *int64
+		err := d.DB.QueryRowContext(ctx, "SELECT sprint_id, workspace_id FROM goals WHERE id = ?", parentID).Scan(&sprintID, &workspaceID)
+		if err != nil {
+			return wrapErr(EntityGoal, "add subtask", parentID, err)
+		}
+
+		var maxRank int
+		maxRank, err = d.getMaxSubtaskRank(ctx, parentID)
+		if err != nil {
+			return wrapErr(EntityGoal, "add subtask", parentID, err)
+		}
+
+		tags := util.TagsToJSON(util.ExtractTags(description))
+		_, err = d.DB.ExecContext(ctx, `INSERT INTO goals (description, parent_id, sprint_id, workspace_id, status, rank, tags) VALUES (?, ?, ?, ?, 'pending', ?, ?)`,
+			description, parentID, sprintID, workspaceID, maxRank+1, tags)
+		return wrapErr(EntityGoal, "add subtask", parentID, err)
+	})
+}
+
+func (d *Database) AddSubtaskDetailed(ctx context.Context, parentID int64, seed GoalSeed) error {
+	return d.withDBContext(ctx, func(ctx context.Context) error {
+		var sprintID *int64
+		var workspaceID *int64
+		err := d.DB.QueryRowContext(ctx, "SELECT sprint_id, workspace_id FROM goals WHERE id = ?", parentID).Scan(&sprintID, &workspaceID)
+		if err != nil {
+			return wrapErr(EntityGoal, "add subtask detailed", parentID, err)
+		}
+
+		var maxRank int
+		if maxRank, err = d.getMaxSubtaskRank(ctx, parentID); err != nil {
+			return wrapErr(EntityGoal, "add subtask detailed", parentID, err)
+		}
+
+		priority := normalizePriority(seed.Priority)
+		effort := normalizeEffort(seed.Effort)
+		tags := seed.Tags
+		if len(tags) == 0 {
+			tags = util.ExtractTags(seed.Description)
+		}
+		tagsJSON := util.TagsToJSON(normalizeTagsFromSlice(tags))
+		linksJSON, err := json.Marshal(seed.Links)
+		if err != nil {
+			return wrapErr(EntityGoal, "add subtask detailed", parentID, err)
+		}
+
+		notesArg := nullableStringIf(seed.Notes)
+		recurrenceArg := nullableStringIf(seed.Recurrence)
+
+		_, err = d.DB.ExecContext(ctx, `INSERT INTO goals (description, parent_id, sprint_id, workspace_id, status, rank, tags, priority, effort, notes, recurrence_rule, links)
+			VALUES (?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?)`,
+			seed.Description, parentID, sprintID, workspaceID, maxRank+1, tagsJSON, priority, effort, notesArg, recurrenceArg, string(linksJSON))
+		return wrapErr(EntityGoal, "add subtask detailed", parentID, err)
+	})
+}
+
+func (d *Database) UpdateGoalStatus(ctx context.Context, goalID int64, status models.GoalStatus) error {
+	return d.withDBContext(ctx, func(ctx context.Context) error {
+		if status == models.GoalStatusCompleted {
+			var active int
+			if err := d.DB.QueryRowContext(ctx, "SELECT task_active FROM goals WHERE id = ?", goalID).Scan(&active); err != nil {
+				return wrapErr(EntityGoal, "update status", goalID, err)
+			}
+			if active == 1 {
+				if err := d.PauseTaskTimer(ctx, goalID); err != nil {
+					return wrapErr(EntityGoal, "update status", goalID, err)
+				}
+			}
+		}
+		var err error
+		statusValue := string(status)
+		if status == models.GoalStatusCompleted {
+			_, err = d.DB.ExecContext(ctx, "UPDATE goals SET status = ?, completed_at = CURRENT_TIMESTAMP WHERE id = ?", statusValue, goalID)
+		} else {
+			_, err = d.DB.ExecContext(ctx, "UPDATE goals SET status = ?, completed_at = NULL WHERE id = ?", statusValue, goalID)
+		}
+		if err != nil {
+			return wrapErr(EntityGoal, "update status", goalID, err)
+		}
+		if status == models.GoalStatusCompleted {
+			return wrapErr(EntityGoal, "regenerate", goalID, d.regenerateRecurringGoal(ctx, goalID))
+		}
+		return nil
+	})
+}
+
+func (d *Database) SwapGoalRanks(ctx context.Context, goalID1, goalID2 int64) error {
+	return d.withDBContext(ctx, func(ctx context.Context) error {
+		var rank1, rank2 int
+		err := d.DB.QueryRowContext(ctx, "SELECT rank FROM goals WHERE id = ?", goalID1).Scan(&rank1)
+		if err != nil {
+			return wrapErr(EntityGoal, "swap ranks", goalID1, err)
+		}
+		err = d.DB.QueryRowContext(ctx, "SELECT rank FROM goals WHERE id = ?", goalID2).Scan(&rank2)
+		if err != nil {
+			return wrapErr(EntityGoal, "swap ranks", goalID2, err)
+		}
+
+		tx, err := d.DB.BeginTx(ctx, nil)
+		if err != nil {
+			return wrapErr(EntityGoal, "swap ranks", 0, err)
+		}
+
+		_, err = tx.ExecContext(ctx, "UPDATE goals SET rank = ? WHERE id = ?", rank2, goalID1)
+		if err != nil {
+			return wrapErr(EntityGoal, "swap ranks", goalID1, rollbackWithLog(tx, err))
+		}
+
+		_, err = tx.ExecContext(ctx, "UPDATE goals SET rank = ? WHERE id = ?", rank1, goalID2)
+		if err != nil {
+			return wrapErr(EntityGoal, "swap ranks", goalID2, rollbackWithLog(tx, err))
+		}
+
+		if err := tx.Commit(); err != nil {
+			return wrapErr(EntityGoal, "swap ranks", 0, err)
+		}
+		return nil
+	})
+}
+
+func (d *Database) StartTaskTimer(ctx context.Context, goalID int64) error {
+	err := d.WithTx(ctx, func(tx *sql.Tx) error {
+		var workspaceID *int64
+		if err := tx.QueryRowContext(ctx, "SELECT workspace_id FROM goals WHERE id = ?", goalID).Scan(&workspaceID); err != nil {
+			return err
+		}
+		if workspaceID == nil {
+			return fmt.Errorf("workspace id missing for goal %d", goalID)
+		}
+		wsID := *workspaceID
+
+		rows, err := tx.QueryContext(ctx, `SELECT id, task_started_at, task_elapsed_seconds FROM goals WHERE workspace_id = ? AND task_active = 1 AND id != ?`, wsID, goalID)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var id int64
+			var started *time.Time
+			var elapsed int
+			if err := rows.Scan(&id, &started, &elapsed); err != nil {
+				return err
+			}
+			if started != nil {
+				elapsed += int(time.Since(*started).Seconds())
+			}
+			if _, err := tx.ExecContext(ctx, "UPDATE goals SET task_active = 0, task_started_at = NULL, task_elapsed_seconds = ? WHERE id = ?", elapsed, id); err != nil {
+				return err
+			}
+		}
+		if _, err := tx.ExecContext(ctx, "UPDATE goals SET task_active = 1, task_started_at = CURRENT_TIMESTAMP WHERE id = ?", goalID); err != nil {
+			return err
+		}
+		if err := rows.Err(); err != nil {
+			return err
+		}
+		return nil
+	})
+	return wrapErr(EntityGoal, "start task timer", goalID, err)
+}
+
+func (d *Database) PauseTaskTimer(ctx context.Context, goalID int64) error {
+	return d.withDBContext(ctx, func(ctx context.Context) error {
+		var started *time.Time
+		var elapsed int
+		var active int
+		if err := d.DB.QueryRowContext(ctx, "SELECT task_active, task_started_at, task_elapsed_seconds FROM goals WHERE id = ?", goalID).Scan(&active, &started, &elapsed); err != nil {
+			return wrapErr(EntityGoal, "pause task timer", goalID, err)
+		}
+		if active == 0 {
+			return nil
+		}
+		if started != nil {
+			elapsed += int(time.Since(*started).Seconds())
+		}
+		_, err := d.DB.ExecContext(ctx, "UPDATE goals SET task_active = 0, task_started_at = NULL, task_elapsed_seconds = ? WHERE id = ?", elapsed, goalID)
+		return wrapErr(EntityGoal, "pause task timer", goalID, err)
+	})
+}
+
+func (d *Database) MoveGoal(ctx context.Context, goalID int64, targetSprintID int64) error {
+	return d.withDBContext(ctx, func(ctx context.Context) error {
+		sprintArg := nullableInt64(targetSprintID)
+		_, err := d.DB.ExecContext(ctx, "UPDATE goals SET sprint_id = ? WHERE id = ?", sprintArg, goalID)
+		return wrapErr(EntityGoal, "move", goalID, err)
+	})
+}
+
+func (d *Database) EditGoal(ctx context.Context, goalID int64, newDescription string) error {
+	return d.withDBContext(ctx, func(ctx context.Context) error {
+		tags := util.TagsToJSON(util.ExtractTags(newDescription))
+		_, err := d.DB.ExecContext(ctx, "UPDATE goals SET description = ?, tags = ? WHERE id = ?", newDescription, tags, goalID)
+		return wrapErr(EntityGoal, "edit", goalID, err)
+	})
+}
+
+func (d *Database) DeleteGoal(ctx context.Context, goalID int64) error {
+	return d.withDBContext(ctx, func(ctx context.Context) error {
+		_, err := d.DB.ExecContext(ctx, "DELETE FROM goals WHERE id = ?", goalID)
+		return wrapErr(EntityGoal, "delete", goalID, err)
+	})
+}
+
+func (d *Database) ArchiveGoal(ctx context.Context, goalID int64) error {
+	return d.withDBContext(ctx, func(ctx context.Context) error {
+		_, err := d.DB.ExecContext(ctx, "UPDATE goals SET status = 'archived', archived_at = CURRENT_TIMESTAMP WHERE id = ?", goalID)
+		return wrapErr(EntityGoal, "archive", goalID, err)
+	})
+}
+
+func (d *Database) UnarchiveGoal(ctx context.Context, goalID int64) error {
+	return d.withDBContext(ctx, func(ctx context.Context) error {
+		_, err := d.DB.ExecContext(ctx, "UPDATE goals SET status = 'pending', archived_at = NULL, sprint_id = NULL WHERE id = ?", goalID)
+		return wrapErr(EntityGoal, "unarchive", goalID, err)
+	})
+}
+
+func (d *Database) AddTagsToGoal(ctx context.Context, goalID int64, tagsToAdd []string) error {
+	return d.updateGoalTags(ctx, goalID, tagsToAdd, true)
+}
+
+func (d *Database) SetGoalTags(ctx context.Context, goalID int64, tags []string) error {
+	return d.updateGoalTags(ctx, goalID, tags, false)
+}
+
+func (d *Database) updateGoalTags(ctx context.Context, goalID int64, tags []string, appendTags bool) error {
+	return d.withDBContext(ctx, func(ctx context.Context) error {
+		var existingTags []string
+		if appendTags {
+			goal, err := d.GetGoalByID(ctx, goalID)
+			if err != nil {
+				return err
+			}
+			if goal.Tags != nil {
+				existingTags = util.JSONToTags(*goal.Tags)
+			}
+		}
+
+		combined := append(existingTags, tags...)
+		normalizedTags := normalizeTagsFromSlice(combined)
+		tagsJSON, err := json.Marshal(normalizedTags)
+		if err != nil {
+			return wrapErr(EntityGoal, "marshal_tags", goalID, err)
+		}
+
+		_, err = d.DB.ExecContext(ctx,
+			`UPDATE goals SET tags = ? WHERE id = ?`,
+			string(tagsJSON), goalID)
+		return wrapErr(EntityGoal, "update_tags", goalID, err)
+	})
+}
+
+// GetBacklogGoals retrieves goals that are not assigned to any sprint and belong to the workspace.
+func (d *Database) GetBacklogGoals(ctx context.Context, workspaceID int64) ([]models.Goal, error) {
+	query, args := NewGoalQuery().
+		WhereBacklog().
+		WhereWorkspace(workspaceID).
+		Where("status != ?", "completed").
+		Where("status != ?", "archived").
+		OrderBy("rank ASC, created_at DESC").
+		Build()
+	return d.queryGoals(ctx, "backlog", query, args...)
+}
+
+func (d *Database) GetGoalByID(ctx context.Context, goalID int64) (models.Goal, error) {
+	return withDBContextResult(d, ctx, func(ctx context.Context) (models.Goal, error) {
+		query := fmt.Sprintf("SELECT %s FROM goals WHERE id = ?", goalColumnsWithSprint)
+		row := d.DB.QueryRowContext(ctx, query, goalID)
+		g, err := scanGoalWithSprint(row)
+		if err != nil {
+			return models.Goal{}, wrapErr(EntityGoal, "get", goalID, err)
+		}
+		return g, nil
+	})
+}
+
+// GetGoalsForSprint retrieves goals for a specific sprint ID.
+func (d *Database) GetGoalsForSprint(ctx context.Context, sprintID int64) ([]models.Goal, error) {
+	query, args := NewGoalQuery().
+		WhereSprint(sprintID).
+		Where("status != ?", "archived").
+		OrderBy("rank ASC, created_at ASC").
+		Build()
+	return d.queryGoals(ctx, "list sprint", query, args...)
+}
+
+type ExistsCheckLevel int
+
+const (
+	ExistsCheckBasic ExistsCheckLevel = iota
+	ExistsCheckDetailed
+)
+
+type ExistsResult struct {
+	Exists     bool
+	ExistingID int64
+	MatchType  string
+}
+
+func (d *Database) CheckGoalExists(ctx context.Context, workspaceID int64, sprintID int64, parentID *int64, description string, level ExistsCheckLevel, seed *GoalSeed) (ExistsResult, error) {
+	return withDBContextResult(d, ctx, func(ctx context.Context) (ExistsResult, error) {
+		result := ExistsResult{MatchType: "none"}
+		desc := strings.TrimSpace(description)
+		if desc == "" {
+			return result, nil
+		}
+
+		if level == ExistsCheckBasic {
+			var row *sql.Row
+			if parentID != nil {
+				row = d.DB.QueryRowContext(ctx,
+					"SELECT id FROM goals WHERE parent_id = ? AND description = ? LIMIT 1",
+					*parentID, desc,
+				)
+			} else if sprintID > 0 {
+				row = d.DB.QueryRowContext(ctx,
+					"SELECT id FROM goals WHERE workspace_id = ? AND sprint_id = ? AND parent_id IS NULL AND description = ? LIMIT 1",
+					workspaceID, sprintID, desc,
+				)
+			} else {
+				row = d.DB.QueryRowContext(ctx,
+					"SELECT id FROM goals WHERE workspace_id = ? AND sprint_id IS NULL AND parent_id IS NULL AND description = ? LIMIT 1",
+					workspaceID, desc,
+				)
+			}
+
+			var id int64
+			if err := row.Scan(&id); err != nil {
+				if err == sql.ErrNoRows {
+					return result, nil
+				}
+				return result, wrapErr(EntityGoal, "exists", 0, err)
+			}
+			result.Exists = true
+			result.ExistingID = id
+			result.MatchType = "exact"
+			return result, nil
+		}
+
+		if level != ExistsCheckDetailed {
+			return result, fmt.Errorf("invalid exists check level: %d", level)
+		}
+
+		if seed == nil {
+			return result, fmt.Errorf("goal seed is required for detailed exists check")
+		}
+
+		normalized := normalizeSeed(*seed)
+		if normalized.Description == "" {
+			return result, nil
+		}
+
+		var rows *sql.Rows
+		var err error
+		if parentID != nil {
+			rows, err = d.DB.QueryContext(ctx,
+				"SELECT id, description, priority, effort, tags, recurrence_rule, notes, links FROM goals WHERE parent_id = ? AND description = ?",
+				*parentID, normalized.Description,
+			)
+		} else if sprintID > 0 {
+			rows, err = d.DB.QueryContext(ctx,
+				"SELECT id, description, priority, effort, tags, recurrence_rule, notes, links FROM goals WHERE workspace_id = ? AND sprint_id = ? AND parent_id IS NULL AND description = ?",
+				workspaceID, sprintID, normalized.Description,
+			)
+		} else {
+			rows, err = d.DB.QueryContext(ctx,
+				"SELECT id, description, priority, effort, tags, recurrence_rule, notes, links FROM goals WHERE workspace_id = ? AND sprint_id IS NULL AND parent_id IS NULL AND description = ?",
+				workspaceID, normalized.Description,
+			)
+		}
+		if err != nil {
+			return result, wrapErr(EntityGoal, "exists", 0, err)
+		}
+		defer rows.Close()
+
+		for rows.Next() {
+			var goal GoalSeed
+			var id int64
+			if err := rows.Scan(&id, &goal.Description, &goal.Priority, &goal.Effort, &goal.Tags, &goal.Recurrence, &goal.Notes, &goal.Links); err != nil {
+				return result, wrapErr(EntityGoal, "exists", 0, err)
+			}
+
+			stored := normalizeSeed(goal)
+			if normalized.Description == stored.Description &&
+				normalized.Priority == stored.Priority &&
+				normalized.Effort == stored.Effort &&
+				reflect.DeepEqual(normalized.Tags, stored.Tags) &&
+				normalized.Recurrence == stored.Recurrence &&
+				normalized.Notes == stored.Notes &&
+				reflect.DeepEqual(normalized.Links, stored.Links) {
+				result.Exists = true
+				result.ExistingID = id
+				result.MatchType = "exact"
+				return result, nil
+			}
+		}
+		if err := rows.Err(); err != nil {
+			return result, wrapErr(EntityGoal, "exists", 0, err)
+		}
+		return result, nil
+	})
+}
+
+func (d *Database) GoalExists(ctx context.Context, workspaceID int64, sprintID int64, parentID *int64, description string) (bool, error) {
+	result, err := d.CheckGoalExists(ctx, workspaceID, sprintID, parentID, description, ExistsCheckBasic, nil)
+	return result.Exists, err
+}
+
+func (d *Database) GoalExistsDetailed(ctx context.Context, workspaceID int64, sprintID int64, parentID *int64, seed GoalSeed) (bool, error) {
+	result, err := d.CheckGoalExists(ctx, workspaceID, sprintID, parentID, seed.Description, ExistsCheckDetailed, &seed)
+	return result.Exists, err
+}
+
+// GetCompletedGoalsForDay retrieves all goals completed on a specific day and workspace across all sprints.
+func (d *Database) GetCompletedGoalsForDay(ctx context.Context, dayID int64, workspaceID int64) ([]models.Goal, error) {
+	dateStr, err := withDBContextResult(d, ctx, func(ctx context.Context) (string, error) {
+		var dateStr string
+		if err := d.DB.QueryRowContext(ctx, "SELECT date FROM days WHERE id = ?", dayID).Scan(&dateStr); err != nil {
+			return "", wrapErr(EntityGoal, "completed list", 0, err)
+		}
+		return dateStr, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	query := fmt.Sprintf(`
+		SELECT %s
+		FROM goals
+		WHERE status = 'completed' AND workspace_id = ?
+		AND (
+			sprint_id IN (SELECT id FROM sprints WHERE day_id = ?)
+			OR (sprint_id IS NULL AND strftime('%%Y-%%m-%%d', completed_at) = ?)
+		)
+		ORDER BY completed_at DESC`, goalColumnsWithSprint)
+	return d.queryGoals(ctx, "completed list", query, workspaceID, dayID, dateStr)
+}
+
+func (d *Database) GetActiveTask(ctx context.Context, workspaceID int64) (*models.Goal, error) {
+	return withDBContextResult(d, ctx, func(ctx context.Context) (*models.Goal, error) {
+		query := fmt.Sprintf(`
+			SELECT %s
+			FROM goals WHERE workspace_id = ? AND task_active = 1 LIMIT 1`, goalColumnsWithSprint)
+		row := d.DB.QueryRowContext(ctx, query, workspaceID)
+		g, err := scanGoalWithSprint(row)
+		if err != nil {
+			if err == sql.ErrNoRows {
+				return nil, nil
+			}
+			return nil, wrapErr(EntityGoal, "active task", 0, err)
+		}
+		return &g, nil
+	})
+}
+
+func (d *Database) Search(ctx context.Context, query util.SearchQuery, workspaceID int64) ([]models.Goal, error) {
+	builder := NewGoalQuery().WhereWorkspace(workspaceID)
+
+	if len(query.Status) > 0 {
+		placeholders := strings.TrimRight(strings.Repeat("?,", len(query.Status)), ",")
+		statusArgs := make([]interface{}, 0, len(query.Status))
+		for _, status := range query.Status {
+			statusArgs = append(statusArgs, status)
+		}
+		builder.Where("status IN ("+placeholders+")", statusArgs...)
+	}
+
+	if len(query.Tags) > 0 {
+		for _, t := range query.Tags {
+			builder.Where("tags LIKE ?", "%"+t+"%")
+		}
+	}
+
+	if len(query.Text) > 0 {
+		for _, term := range query.Text {
+			if strings.TrimSpace(term) == "" {
+				continue
+			}
+			builder.Where("description LIKE ?", "%"+term+"%")
+		}
+	}
+
+	sql, args := builder.OrderBy("created_at DESC").Limit(50).Build()
+
+	return d.queryGoals(ctx, "search", sql, args...)
+}
+
+func (d *Database) queryGoals(ctx context.Context, op string, query string, args ...interface{}) ([]models.Goal, error) {
+	return withDBContextResult(d, ctx, func(ctx context.Context) ([]models.Goal, error) {
+		rows, err := d.DB.QueryContext(ctx, query, args...)
+		if err != nil {
+			return nil, wrapErr(EntityGoal, op, 0, err)
+		}
+		defer rows.Close()
+
+		var goals []models.Goal
+		for rows.Next() {
+			g, err := scanGoalWithSprint(rows)
+			if err != nil {
+				return nil, wrapErr(EntityGoal, op, 0, err)
+			}
+			goals = append(goals, g)
+		}
+		if err := rows.Err(); err != nil {
+			return nil, wrapErr(EntityGoal, op, 0, err)
+		}
+		return goals, nil
+	})
+}
+
+func (d *Database) GetAllGoals(ctx context.Context) ([]models.Goal, error) {
+	query := fmt.Sprintf(`
+		SELECT %s
+		FROM goals
+		ORDER BY rank ASC, created_at ASC`, goalColumnsWithSprint)
+	return d.queryGoals(ctx, "list all", query)
+}
+
+// GetLastGoalID returns the highest goal ID or 0 when no goals exist.
+func (d *Database) GetLastGoalID(ctx context.Context) (int64, error) {
+	return withDBContextResult(d, ctx, func(ctx context.Context) (int64, error) {
+		var id int64
+		err := d.DB.QueryRowContext(ctx, "SELECT id FROM goals ORDER BY id DESC LIMIT 1").Scan(&id)
+		if err == sql.ErrNoRows {
+			return 0, nil
+		}
+		if err != nil {
+			return 0, wrapErr(EntityGoal, "last id", 0, err)
+		}
+		return id, nil
+	})
+}
+
+// GetArchivedGoals returns archived goals for a workspace.
+func (d *Database) GetArchivedGoals(ctx context.Context, workspaceID int64) ([]models.Goal, error) {
+	query := fmt.Sprintf(`
+		SELECT %s
+		FROM goals
+		WHERE status = 'archived' AND workspace_id = ?
+		ORDER BY archived_at DESC`, goalColumnsWithSprint)
+	return d.queryGoals(ctx, "archived list", query, workspaceID)
 }

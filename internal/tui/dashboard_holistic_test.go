@@ -57,8 +57,8 @@ func TestDashboardTagFlow(t *testing.T) {
 
 	model, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'t'}})
 	m, _ = model.(DashboardModel)
-	if !m.modal.tagging {
-		t.Fatalf("expected tagging to be true")
+	if !m.modal.Is(ModalTagging) {
+		t.Fatalf("expected tagging modal to be open")
 	}
 
 	model, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
@@ -96,10 +96,11 @@ func TestDashboardDependencyFlow(t *testing.T) {
 
 	model, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'D'}})
 	m, _ = model.(DashboardModel)
-	if !m.modal.depPicking {
-		t.Fatalf("expected dep picking to be true")
+	if !m.modal.Is(ModalDependency) {
+		t.Fatalf("expected dependency modal to be open")
 	}
-	if len(m.modal.depOptions) == 0 {
+	state, ok := m.modal.DependencyState()
+	if !ok || len(state.Options) == 0 {
 		t.Fatalf("expected dependency options")
 	}
 
@@ -138,7 +139,7 @@ func TestDashboardRecurrenceFlow(t *testing.T) {
 
 	model, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'R'}})
 	m, _ = model.(DashboardModel)
-	if !m.modal.settingRecurrence {
+	if !m.modal.Is(ModalRecurrence) {
 		t.Fatalf("expected recurrence modal to be active")
 	}
 
@@ -163,14 +164,14 @@ func TestDashboardJournalFlow(t *testing.T) {
 
 	model, _ := m.Update(tea.KeyMsg{Type: tea.KeyCtrlJ})
 	m, _ = model.(DashboardModel)
-	if !m.modal.journaling {
+	if !m.modal.Is(ModalJournaling) {
 		t.Fatalf("expected journaling to be true")
 	}
 
 	m.inputs.journalInput.SetValue("Journal entry")
 	model, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m, _ = model.(DashboardModel)
-	if m.modal.journaling {
+	if m.modal.Is(ModalJournaling) {
 		t.Fatalf("expected journaling to end")
 	}
 
