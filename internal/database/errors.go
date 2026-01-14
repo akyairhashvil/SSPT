@@ -6,9 +6,10 @@ import (
 )
 
 var (
-	ErrDatabaseEncrypted = errors.New("database is encrypted")
-	ErrDatabaseCorrupted = errors.New("database file is corrupted")
-	ErrWrongPassphrase   = errors.New("incorrect passphrase")
+	ErrDatabaseEncrypted  = errors.New("database is encrypted")
+	ErrDatabaseCorrupted  = errors.New("database file is corrupted")
+	ErrWrongPassphrase    = errors.New("incorrect passphrase")
+	ErrCircularDependency = errors.New("circular dependency detected")
 )
 
 const (
@@ -54,29 +55,5 @@ func wrapErr(entity, op string, id int64, err error) error {
 	if err == nil {
 		return nil
 	}
-	if id > 0 {
-		return fmt.Errorf("%s %s (id=%d): %w", op, entity, id, err)
-	}
-	return fmt.Errorf("%s %s: %w", op, entity, err)
-}
-
-func wrapGoalErr(op string, id int64, err error) error {
-	if err == nil {
-		return nil
-	}
-	return &OpError{Op: op, Resource: "goal", ID: id, Err: err}
-}
-
-func wrapSprintErr(op string, id int64, err error) error {
-	if err == nil {
-		return nil
-	}
-	return &OpError{Op: op, Resource: "sprint", ID: id, Err: err}
-}
-
-func wrapWorkspaceErr(op string, id int64, err error) error {
-	if err == nil {
-		return nil
-	}
-	return &OpError{Op: op, Resource: "workspace", ID: id, Err: err}
+	return &OpError{Op: op, Resource: entity, ID: id, Err: err}
 }

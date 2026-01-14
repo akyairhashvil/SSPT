@@ -35,7 +35,7 @@ func setupTestDashboard(t *testing.T) DashboardModel {
 		t.Fatalf("CheckCurrentDay returned zero ID")
 	}
 
-	m := NewDashboardModel(ctx, db, dayID)
+	m := NewDashboardModel(ctx, db, dayID, ResolveTheme("default"))
 	m.security.lock.Locked = false
 	return m
 }

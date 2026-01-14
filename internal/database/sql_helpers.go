@@ -1,6 +1,9 @@
 package database
 
-import "database/sql"
+import (
+	"database/sql"
+	"strings"
+)
 
 // nullableInt64 converts an int64 to sql.NullInt64 for optional fields.
 // Values <= 0 are treated as NULL.
@@ -11,6 +14,12 @@ func nullableInt64(v int64) sql.NullInt64 {
 // nullableString converts a string to sql.NullString for optional fields.
 // Empty strings are treated as NULL.
 func nullableString(v string) sql.NullString {
+	return sql.NullString{String: v, Valid: v != ""}
+}
+
+// nullableStringIf trims whitespace and returns a sql.NullString if non-empty.
+func nullableStringIf(v string) sql.NullString {
+	v = strings.TrimSpace(v)
 	return sql.NullString{String: v, Valid: v != ""}
 }
 

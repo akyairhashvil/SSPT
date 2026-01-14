@@ -18,6 +18,12 @@ func TestNullableHelpers(t *testing.T) {
 	if got := nullableString("note"); !got.Valid || got.String != "note" {
 		t.Fatalf("expected nullableString(\"note\") to be valid, got %+v", got)
 	}
+	if got := nullableStringIf("   "); got.Valid {
+		t.Fatalf("expected nullableStringIf(\"   \") to be invalid, got valid")
+	}
+	if got := nullableStringIf(" note "); !got.Valid || got.String != "note" {
+		t.Fatalf("expected nullableStringIf(\" note \") to be valid with trimmed value, got %+v", got)
+	}
 	if got := toNullableArg[int](nil); got != nil {
 		t.Fatalf("expected toNullableArg(nil) to return nil, got %v", got)
 	}

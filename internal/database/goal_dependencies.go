@@ -15,48 +15,55 @@ import (
 //
 // Returns OpError if either goal doesn't exist.
 func (d *Database) AddGoalDependency(ctx context.Context, goalID, dependsOnID int64) error {
-	ctx, cancel := d.withTimeout(ctx, defaultDBTimeout)
-	defer cancel()
-	goalWS, ok := d.getGoalWorkspaceID(ctx, goalID)
-	if !ok {
-		return nil
-	}
-	depWS, ok := d.getGoalWorkspaceID(ctx, dependsOnID)
-	if !ok || depWS != goalWS {
-		return nil
-	}
-	_, err := d.DB.ExecContext(ctx, "INSERT OR IGNORE INTO task_deps (goal_id, depends_on_id) VALUES (?, ?)", goalID, dependsOnID)
-	return wrapGoalErr("add dependency", goalID, err)
+	return d.withDBContext(ctx, func(ctx context.Context) error {
+		goalWS, ok := d.getGoalWorkspaceID(ctx, goalID)
+		if !ok {
+			return nil
+		}
+		depWS, ok := d.getGoalWorkspaceID(ctx, dependsOnID)
+		if !ok || depWS != goalWS {
+			return nil
+		}
+		createsCycle, err := d.wouldCreateCycle(ctx, goalID, dependsOnID)
+		if err != nil {
+			return wrapErr(EntityGoal, "add dependency", goalID, err)
+		}
+		if createsCycle {
+			return ErrCircularDependency
+		}
+		_, err = d.DB.ExecContext(ctx, "INSERT OR IGNORE INTO task_deps (goal_id, depends_on_id) VALUES (?, ?)", goalID, dependsOnID)
+		return wrapErr(EntityGoal, "add dependency", goalID, err)
+	})
 }
 
 func (d *Database) RemoveGoalDependency(ctx context.Context, goalID, dependsOnID int64) error {
-	ctx, cancel := d.withTimeout(ctx, defaultDBTimeout)
-	defer cancel()
-	_, err := d.DB.ExecContext(ctx, "DELETE FROM task_deps WHERE goal_id = ? AND depends_on_id = ?", goalID, dependsOnID)
-	return wrapGoalErr("remove dependency", goalID, err)
+	return d.withDBContext(ctx, func(ctx context.Context) error {
+		_, err := d.DB.ExecContext(ctx, "DELETE FROM task_deps WHERE goal_id = ? AND depends_on_id = ?", goalID, dependsOnID)
+		return wrapErr(EntityGoal, "remove dependency", goalID, err)
+	})
 }
 
 func (d *Database) GetGoalDependencies(ctx context.Context, goalID int64) (map[int64]bool, error) {
-	ctx, cancel := d.withTimeout(ctx, defaultDBTimeout)
-	defer cancel()
-	rows, err := d.DB.QueryContext(ctx, "SELECT depends_on_id FROM task_deps WHERE goal_id = ?", goalID)
-	if err != nil {
-		return nil, wrapGoalErr("get dependencies", goalID, err)
-	}
-	defer rows.Close()
-
-	deps := make(map[int64]bool)
-	for rows.Next() {
-		var id int64
-		if err := rows.Scan(&id); err != nil {
-			return nil, wrapGoalErr("get dependencies", goalID, err)
+	return withDBContextResult(d, ctx, func(ctx context.Context) (map[int64]bool, error) {
+		rows, err := d.DB.QueryContext(ctx, "SELECT depends_on_id FROM task_deps WHERE goal_id = ?", goalID)
+		if err != nil {
+			return nil, wrapErr(EntityGoal, "get dependencies", goalID, err)
 		}
-		deps[id] = true
-	}
-	if err := rows.Err(); err != nil {
-		return nil, wrapGoalErr("get dependencies", goalID, err)
-	}
-	return deps, nil
+		defer rows.Close()
+
+		deps := make(map[int64]bool)
+		for rows.Next() {
+			var id int64
+			if err := rows.Scan(&id); err != nil {
+				return nil, wrapErr(EntityGoal, "get dependencies", goalID, err)
+			}
+			deps[id] = true
+		}
+		if err := rows.Err(); err != nil {
+			return nil, wrapErr(EntityGoal, "get dependencies", goalID, err)
+		}
+		return deps, nil
+	})
 }
 
 func (d *Database) SetGoalDependencies(ctx context.Context, goalID int64, deps []int64) error {
@@ -88,7 +95,30 @@ func (d *Database) SetGoalDependencies(ctx context.Context, goalID int64, deps [
 		}
 		return nil
 	})
-	return wrapGoalErr("set dependencies", goalID, err)
+	return wrapErr(EntityGoal, "set dependencies", goalID, err)
+}
+
+func (d *Database) wouldCreateCycle(ctx context.Context, goalID, dependsOnID int64) (bool, error) {
+	if goalID == dependsOnID {
+		return true, nil
+	}
+	var found int
+	err := d.DB.QueryRowContext(ctx, `
+		WITH RECURSIVE dep(id) AS (
+			SELECT depends_on_id FROM task_deps WHERE goal_id = ?
+			UNION
+			SELECT td.depends_on_id FROM task_deps td
+			JOIN dep d ON td.goal_id = d.id
+		)
+		SELECT 1 FROM dep WHERE id = ? LIMIT 1
+	`, dependsOnID, goalID).Scan(&found)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func (d *Database) getGoalWorkspaceID(ctx context.Context, goalID int64) (int64, bool) {
@@ -103,7 +133,7 @@ func (d *Database) getGoalWorkspaceID(ctx context.Context, goalID int64) (int64,
 func getGoalWorkspaceIDTx(ctx context.Context, tx *sql.Tx, goalID int64) (int64, bool, error) {
 	var wsID *int64
 	if err := tx.QueryRowContext(ctx, "SELECT workspace_id FROM goals WHERE id = ?", goalID).Scan(&wsID); err != nil {
-		return 0, false, wrapGoalErr("workspace lookup", goalID, err)
+		return 0, false, wrapErr(EntityGoal, "workspace lookup", goalID, err)
 	}
 	if wsID == nil {
 		return 0, false, nil
@@ -119,44 +149,44 @@ func getGoalWorkspaceIDTx(ctx context.Context, tx *sql.Tx, goalID int64) (int64,
 //   - false if no dependencies or all dependencies completed
 //   - error if goal doesn't exist or database error
 func (d *Database) IsGoalBlocked(ctx context.Context, goalID int64) (bool, error) {
-	ctx, cancel := d.withTimeout(ctx, defaultDBTimeout)
-	defer cancel()
-	var count int
-	err := d.DB.QueryRowContext(ctx, `
-		SELECT COUNT(1)
-		FROM task_deps td
-		JOIN goals g ON td.depends_on_id = g.id
-		WHERE td.goal_id = ? AND g.status != 'completed'`, goalID).Scan(&count)
-	if err != nil {
-		return false, wrapGoalErr("is blocked", goalID, err)
-	}
-	return count > 0, nil
+	return withDBContextResult(d, ctx, func(ctx context.Context) (bool, error) {
+		var count int
+		err := d.DB.QueryRowContext(ctx, `
+			SELECT COUNT(1)
+			FROM task_deps td
+			JOIN goals g ON td.depends_on_id = g.id
+			WHERE td.goal_id = ? AND g.status != 'completed'`, goalID).Scan(&count)
+		if err != nil {
+			return false, wrapErr(EntityGoal, "is blocked", goalID, err)
+		}
+		return count > 0, nil
+	})
 }
 
 func (d *Database) GetBlockedGoalIDs(ctx context.Context, workspaceID int64) (map[int64]bool, error) {
-	ctx, cancel := d.withTimeout(ctx, defaultDBTimeout)
-	defer cancel()
-	rows, err := d.DB.QueryContext(ctx, `
-		SELECT DISTINCT td.goal_id
-		FROM task_deps td
-		JOIN goals g ON td.depends_on_id = g.id
-		JOIN goals gg ON td.goal_id = gg.id
-		WHERE gg.workspace_id = ? AND g.status != 'completed'`, workspaceID)
-	if err != nil {
-		return nil, wrapGoalErr("list blocked", 0, err)
-	}
-	defer rows.Close()
-
-	blocked := make(map[int64]bool)
-	for rows.Next() {
-		var id int64
-		if err := rows.Scan(&id); err != nil {
-			return nil, wrapGoalErr("list blocked", 0, err)
+	return withDBContextResult(d, ctx, func(ctx context.Context) (map[int64]bool, error) {
+		rows, err := d.DB.QueryContext(ctx, `
+			SELECT DISTINCT td.goal_id
+			FROM task_deps td
+			JOIN goals g ON td.depends_on_id = g.id
+			JOIN goals gg ON td.goal_id = gg.id
+			WHERE gg.workspace_id = ? AND g.status != 'completed'`, workspaceID)
+		if err != nil {
+			return nil, wrapErr(EntityGoal, "list blocked", 0, err)
 		}
-		blocked[id] = true
-	}
-	if err := rows.Err(); err != nil {
-		return nil, wrapGoalErr("list blocked", 0, err)
-	}
-	return blocked, nil
+		defer rows.Close()
+
+		blocked := make(map[int64]bool)
+		for rows.Next() {
+			var id int64
+			if err := rows.Scan(&id); err != nil {
+				return nil, wrapErr(EntityGoal, "list blocked", 0, err)
+			}
+			blocked[id] = true
+		}
+		if err := rows.Err(); err != nil {
+			return nil, wrapErr(EntityGoal, "list blocked", 0, err)
+		}
+		return blocked, nil
+	})
 }

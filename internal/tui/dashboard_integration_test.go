@@ -36,7 +36,7 @@ func setupIntegrationDashboard(t *testing.T) (DashboardModel, *database.Database
 		t.Fatalf("CheckCurrentDay returned zero ID")
 	}
 
-	m := NewDashboardModel(ctx, db, dayID)
+	m := NewDashboardModel(ctx, db, dayID, ResolveTheme("default"))
 	m.security.lock.Locked = false
 	return m, db
 }

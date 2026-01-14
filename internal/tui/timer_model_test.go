@@ -2,8 +2,8 @@ package tui
 
 import "testing"
 
-func TestNewTimerModelDefaults(t *testing.T) {
-	m := NewTimerModel()
+func TestNewTimerManagerDefaults(t *testing.T) {
+	m := NewTimerManager()
 	if m.ActiveSprint != nil {
 		t.Fatalf("expected ActiveSprint to be nil")
 	}

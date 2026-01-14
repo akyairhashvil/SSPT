@@ -48,7 +48,7 @@ func NewMainModel(ctx context.Context, db Database) MainModel {
 
 	if dayID > 0 {
 		m.state = StateDashboard
-		m.dashboard = NewDashboardModel(ctx, db, dayID) // Load existing day
+		m.dashboard = NewDashboardModel(ctx, db, dayID, ResolveTheme("default")) // Load existing day
 	} else {
 		m.state = StateInitializing
 		ti := textinput.New()
@@ -137,7 +137,7 @@ func (m MainModel) updateInitializing(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 			// Transition state
 			m.state = StateDashboard
-			m.dashboard = NewDashboardModel(m.ctx, m.db, m.db.CheckCurrentDay(m.ctx)) // Load the new day
+			m.dashboard = NewDashboardModel(m.ctx, m.db, m.db.CheckCurrentDay(m.ctx), ResolveTheme("default")) // Load the new day
 			m.dashboard.width = m.width
 			m.dashboard.height = m.height
 			return m, m.dashboard.Init()

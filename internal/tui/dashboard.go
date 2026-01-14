@@ -46,15 +46,16 @@ type DashboardModel struct {
 	activeWorkspaceIdx int
 	viewMode           int
 	view               *ViewState
-	modal              *ModalState
+	modal              *ModalManager
 	inputs             *InputState
-	security           *SecurityState
+	security           *SecurityManager
 	journalEntries     []models.JournalEntry
-	search             SearchModel
+	search             SearchManager
 	showAnalytics      bool
 	goalTreeCache      map[string][]GoalView
 	progress           progress.Model
-	timer              TimerModel
+	timer              TimerManager
+	theme              Theme
 	err                error
 	statusMessage      string
 	statusIsError      bool
@@ -67,7 +68,7 @@ type depOption struct {
 	Label string
 }
 
-func NewDashboardModel(ctx context.Context, db Database, dayID int64) DashboardModel {
+func NewDashboardModel(ctx context.Context, db Database, dayID int64, theme Theme) DashboardModel {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -82,10 +83,10 @@ func NewDashboardModel(ctx context.Context, db Database, dayID int64) DashboardM
 	passInput.Width = 30
 
 	lock := NewLockModel(config.AutoLockAfter, passInput)
-	search := NewSearchModel(si)
+	search := NewSearchManager(si)
 	view := newViewState()
-	modal := newModalState()
-	security := newSecurityState(lock)
+	modal := newModalManager()
+	security := newSecurityManager(lock)
 	modal.defaultTags = []string{"urgent", "docs", "blocked", "waiting", "bug", "idea", "review", "focus", "later"}
 	modal.themeOrder = []string{"default", "dracula", "cyberpunk", "solar"}
 	modal.recurrenceOptions = []string{"none", "daily", "weekly", "monthly"}
@@ -103,9 +104,10 @@ func NewDashboardModel(ctx context.Context, db Database, dayID int64) DashboardM
 		inputs:             inputs,
 		security:           security,
 		search:             search,
-		timer:              NewTimerModel(),
+		timer:              NewTimerManager(),
 		progress:           progress.New(progress.WithDefaultGradient()),
 		activeWorkspaceIdx: 0,
+		theme:              theme,
 	}
 	if wsErr != nil {
 		m.setStatusError(fmt.Sprintf("Error ensuring default workspace: %v", wsErr))
@@ -249,7 +251,7 @@ func (m *DashboardModel) refreshData(dayID int64) {
 	}
 	activeWS := m.workspaces[m.activeWorkspaceIdx]
 	m.viewMode = activeWS.ViewMode
-	SetTheme(activeWS.Theme)
+	m.theme = ResolveTheme(activeWS.Theme)
 	blockedIDs, err := m.db.GetBlockedGoalIDs(m.ctx, activeWS.ID)
 	if err != nil {
 		m.setStatusError(fmt.Sprintf("Error loading blocked goals: %v", err))

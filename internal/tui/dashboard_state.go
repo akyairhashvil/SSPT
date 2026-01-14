@@ -22,8 +22,8 @@ func newViewState() *ViewState {
 	}
 }
 
-// ModalState tracks modal-related UI state and selections.
-type ModalState struct {
+// ModalManager tracks modal-related UI state and selections.
+type ModalManager struct {
 	creatingGoal         bool
 	editingGoal          bool
 	editingGoalID        int64
@@ -59,11 +59,73 @@ type ModalState struct {
 	journaling           bool
 }
 
-func newModalState() *ModalState {
-	return &ModalState{
+type ModalType string
+
+const (
+	ModalNone              ModalType = "none"
+	ModalCreatingGoal      ModalType = "creating_goal"
+	ModalEditingGoal       ModalType = "editing_goal"
+	ModalMovingGoal        ModalType = "moving_goal"
+	ModalCreatingWorkspace ModalType = "creating_workspace"
+	ModalInitializing      ModalType = "initializing_sprints"
+	ModalTagging           ModalType = "tagging"
+	ModalThemePicking      ModalType = "theme_picking"
+	ModalDependency        ModalType = "dependency"
+	ModalRecurrence        ModalType = "recurrence"
+	ModalConfirmDelete     ModalType = "confirm_delete"
+	ModalJournaling        ModalType = "journaling"
+)
+
+func newModalManager() *ModalManager {
+	return &ModalManager{
 		tagSelected:        make(map[string]bool),
 		depSelected:        make(map[int64]bool),
 		recurrenceSelected: make(map[string]bool),
+	}
+}
+
+func (m *ModalManager) InInputMode(security *SecurityManager, search SearchManager) bool {
+	return security.changingPassphrase ||
+		m.confirmingDelete ||
+		security.confirmingClearDB ||
+		m.creatingGoal ||
+		m.editingGoal ||
+		m.journaling ||
+		search.Active ||
+		m.creatingWorkspace ||
+		m.initializingSprints ||
+		m.tagging ||
+		m.themePicking ||
+		m.depPicking ||
+		m.settingRecurrence
+}
+
+func (m *ModalManager) ActiveModal() ModalType {
+	switch {
+	case m.creatingGoal:
+		return ModalCreatingGoal
+	case m.editingGoal:
+		return ModalEditingGoal
+	case m.movingGoal:
+		return ModalMovingGoal
+	case m.creatingWorkspace:
+		return ModalCreatingWorkspace
+	case m.initializingSprints:
+		return ModalInitializing
+	case m.tagging:
+		return ModalTagging
+	case m.themePicking:
+		return ModalThemePicking
+	case m.depPicking:
+		return ModalDependency
+	case m.settingRecurrence:
+		return ModalRecurrence
+	case m.confirmingDelete:
+		return ModalConfirmDelete
+	case m.journaling:
+		return ModalJournaling
+	default:
+		return ModalNone
 	}
 }
 
@@ -116,8 +178,8 @@ func newInputState() *InputState {
 	}
 }
 
-// SecurityState tracks authentication and destructive operation flags.
-type SecurityState struct {
+// SecurityManager tracks authentication and destructive operation flags.
+type SecurityManager struct {
 	lock               LockModel
 	changingPassphrase bool
 	confirmingClearDB  bool
@@ -127,6 +189,6 @@ type SecurityState struct {
 	passphraseStatus   string
 }
 
-func newSecurityState(lock LockModel) *SecurityState {
-	return &SecurityState{lock: lock}
+func newSecurityManager(lock LockModel) *SecurityManager {
+	return &SecurityManager{lock: lock}
 }

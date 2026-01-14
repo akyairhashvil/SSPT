@@ -53,7 +53,7 @@ func (m DashboardModel) renderHeader() string {
 			rem = 0
 		}
 		timerContent = fmt.Sprintf("☕ BREAK TIME: %02d:%02d REMAINING", int(rem.Minutes()), int(rem.Seconds())%60)
-		timerColor = CurrentTheme.Break
+		timerColor = m.theme.Break
 	} else if m.timer.ActiveSprint != nil {
 		startedAt := time.Now()
 		if m.timer.ActiveSprint.StartTime != nil {
@@ -67,7 +67,7 @@ func (m DashboardModel) renderHeader() string {
 		timeStr := fmt.Sprintf("%02d:%02d", int(rem.Minutes()), int(rem.Seconds())%60)
 		barView := m.progress.ViewAs(float64(elapsed) / float64(config.SprintDuration))
 		timerContent = fmt.Sprintf("ACTIVE SPRINT: %d  |  %s  |  %s remaining", m.timer.ActiveSprint.SprintNumber, barView, timeStr)
-		timerColor = CurrentTheme.Focused
+		timerColor = m.theme.Focused
 	} else {
 		if len(m.workspaces) > 0 {
 			// Safety index check
@@ -79,7 +79,7 @@ func (m DashboardModel) renderHeader() string {
 		} else {
 			timerContent = "No workspaces found."
 		}
-		timerColor = CurrentTheme.Dim
+		timerColor = m.theme.Dim
 
 		if m.view.focusedColIdx < len(m.sprints) {
 			target := m.sprints[m.view.focusedColIdx]
@@ -88,14 +88,14 @@ func (m DashboardModel) renderHeader() string {
 				rem := config.SprintDuration - elapsed
 				timeStr := fmt.Sprintf("%02d:%02d", int(rem.Minutes()), int(rem.Seconds())%60)
 				timerContent = fmt.Sprintf("PAUSED SPRINT: %d  |  %s remaining  |  [s] to Resume", target.SprintNumber, timeStr)
-				timerColor = CurrentTheme.Break
+				timerColor = m.theme.Break
 			}
 		}
 	}
 
 	if timerContent == "" {
 		timerContent = "SSPT - Ready"
-		timerColor = CurrentTheme.Dim
+		timerColor = m.theme.Dim
 	}
 	encInfo := m.db.EncryptionStatus()
 	cipherOn, encrypted, cipherVer := encInfo.CipherAvailable, encInfo.DatabaseEncrypted, encInfo.CipherVersion
@@ -122,7 +122,7 @@ func (m DashboardModel) renderHeader() string {
 	headerFrame := lipgloss.NewStyle().
 		Align(lipgloss.Center).
 		Border(lipgloss.RoundedBorder()).
-		BorderForeground(CurrentTheme.Border).
+		BorderForeground(m.theme.Border).
 		Padding(0, 1)
 	headerExtra := lipgloss.Width(headerFrame.Render(""))
 	headerWidth := m.width - headerExtra
@@ -139,45 +139,45 @@ func (m DashboardModel) renderFooter() string {
 	var rawFooter string
 	hasStatusMessage := m.statusMessage != ""
 	if hasStatusMessage {
-		statusStyle := CurrentTheme.Break.Foreground(lipgloss.Color("196"))
+		statusStyle := m.theme.Break.Foreground(lipgloss.Color("196"))
 		if !m.statusIsError {
-			statusStyle = CurrentTheme.Break.Foreground(lipgloss.Color("208"))
+			statusStyle = m.theme.Break.Foreground(lipgloss.Color("208"))
 		}
 		footerContent = statusStyle.Render(m.statusMessage)
 	} else if m.Message != "" {
-		footerContent = CurrentTheme.Break.Foreground(lipgloss.Color("208")).Render(m.Message)
+		footerContent = m.theme.Break.Foreground(lipgloss.Color("208")).Render(m.Message)
 	} else if m.modal.creatingGoal || m.modal.editingGoal || m.modal.creatingWorkspace || m.modal.initializingSprints {
-		footerContent = CurrentTheme.Input.Render(m.inputs.textInput.View())
+		footerContent = m.theme.Input.Render(m.inputs.textInput.View())
 	} else if m.modal.tagging {
-		footerContent = CurrentTheme.Dim.Render("[Tab] Toggle Tag | [Enter] Save | [Esc] Cancel")
+		footerContent = m.theme.Dim.Render("[Tab] Toggle Tag | [Enter] Save | [Esc] Cancel")
 	} else if m.modal.themePicking {
-		footerContent = CurrentTheme.Dim.Render("[Enter] Apply Theme | [Esc] Cancel")
+		footerContent = m.theme.Dim.Render("[Enter] Apply Theme | [Esc] Cancel")
 	} else if m.modal.depPicking {
-		footerContent = CurrentTheme.Dim.Render("[Space] Toggle | [Enter] Save | [Esc] Cancel")
+		footerContent = m.theme.Dim.Render("[Space] Toggle | [Enter] Save | [Esc] Cancel")
 	} else if m.modal.settingRecurrence {
-		footerContent = CurrentTheme.Dim.Render("[Tab] Next | [Space] Toggle | [Enter] Save | [Esc] Cancel")
+		footerContent = m.theme.Dim.Render("[Tab] Next | [Space] Toggle | [Enter] Save | [Esc] Cancel")
 	} else if m.modal.confirmingDelete {
-		footerContent = CurrentTheme.Focused.Render("Delete task? [d] Delete | [a] Archive | [Esc] Cancel")
+		footerContent = m.theme.Focused.Render("Delete task? [d] Delete | [a] Archive | [Esc] Cancel")
 	} else if m.security.confirmingClearDB {
 		var lines []string
-		lines = append(lines, CurrentTheme.Focused.Render("Clear database? This deletes all data."))
+		lines = append(lines, m.theme.Focused.Render("Clear database? This deletes all data."))
 		if m.security.clearDBStatus != "" {
-			lines = append(lines, CurrentTheme.Break.Render(m.security.clearDBStatus))
+			lines = append(lines, m.theme.Break.Render(m.security.clearDBStatus))
 		}
 		if m.security.clearDBNeedsPass {
-			lines = append(lines, CurrentTheme.Dim.Render("Enter passphrase to confirm:"))
-			lines = append(lines, CurrentTheme.Focused.Render("> ")+m.security.lock.PassphraseInput.View())
+			lines = append(lines, m.theme.Dim.Render("Enter passphrase to confirm:"))
+			lines = append(lines, m.theme.Focused.Render("> ")+m.security.lock.PassphraseInput.View())
 		} else {
-			lines = append(lines, CurrentTheme.Dim.Render("[c] Clear | [Esc] Cancel"))
+			lines = append(lines, m.theme.Dim.Render("[c] Clear | [Esc] Cancel"))
 		}
 		footerContent = lipgloss.JoinVertical(lipgloss.Left, lines...)
 	} else if m.security.changingPassphrase {
-		footerContent = CurrentTheme.Dim.Render("[Enter] Next | [Esc] Cancel")
+		footerContent = m.theme.Dim.Render("[Enter] Next | [Esc] Cancel")
 	} else if m.modal.journaling {
 		// Only render journaling input in the journal pane, avoid duplicate
-		footerContent = CurrentTheme.Dim.Render("[Enter] to Save Log | [Esc] Cancel")
+		footerContent = m.theme.Dim.Render("[Enter] to Save Log | [Esc] Cancel")
 	} else if m.modal.movingGoal {
-		footerContent = CurrentTheme.Focused.Render("MOVE TO: [0] Backlog | [1-8] Sprint # | [Esc] Cancel")
+		footerContent = m.theme.Focused.Render("MOVE TO: [0] Backlog | [1-8] Sprint # | [Esc] Cancel")
 	} else {
 		baseHelp := "[n]New|[N]Sub|[e]Edit|[z]Toggle|[T]Task|[P]Priority|[+/-]Sprint|[w]Cycle|[W]New WS|[t]Tag|[m]Move|[D]Deps|[R]Repeat|[/]Search|[J]Journal|[I]Import|[G]Graph|[p]Passphrase|[d]Delete|[A]Archive|[u]Unarchive|[L]Lock|[C]Clear DB|[b]Backlog|[c]Completed|[a]Archived|[v]View|[Y]Theme"
 		var timerHelp string
@@ -188,12 +188,12 @@ func (m DashboardModel) renderFooter() string {
 		}
 		fullHelp := baseHelp + timerHelp + "|[ctrl+e]Export|[ctrl+r]Report|[q]Quit"
 		rawFooter = fullHelp
-		footerContent = CurrentTheme.Dim.Render(fullHelp)
+		footerContent = m.theme.Dim.Render(fullHelp)
 	}
 	if footerContent != "" {
 		boxed := lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
-			BorderForeground(CurrentTheme.Border).
+			BorderForeground(m.theme.Border).
 			Padding(0, 1)
 		innerWidth := m.width - lipgloss.Width(boxed.Render(""))
 		if innerWidth < 1 {
@@ -266,7 +266,7 @@ func (m DashboardModel) renderFooter() string {
 					lines = append(lines, strings.Join(currentTokens, sep))
 				}
 				for _, line := range lines {
-					footerHelpLines = append(footerHelpLines, lipgloss.PlaceHorizontal(innerWidth, lipgloss.Center, CurrentTheme.Dim.Render(line)))
+					footerHelpLines = append(footerHelpLines, lipgloss.PlaceHorizontal(innerWidth, lipgloss.Center, m.theme.Dim.Render(line)))
 				}
 				content = lipgloss.JoinVertical(lipgloss.Left, footerHelpLines...)
 			}
@@ -323,7 +323,7 @@ func (m DashboardModel) buildBoardLayout() boardLayout {
 
 	colFrame := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
-		BorderForeground(CurrentTheme.Dim.GetForeground()).
+		BorderForeground(m.theme.Dim.GetForeground()).
 		Padding(0, 1)
 	colExtra := lipgloss.Width(colFrame.Render(""))
 	// Dynamic Width Calculation
@@ -373,7 +373,7 @@ func (m DashboardModel) renderBoard(height int, layout boardLayout) string {
 		Height(contentHeight).
 		MaxHeight(contentHeight)
 	dynActiveColStyle := dynColStyle.
-		BorderForeground(CurrentTheme.Border).
+		BorderForeground(m.theme.Border).
 		BorderStyle(lipgloss.ThickBorder())
 
 	var renderedCols []string
@@ -403,7 +403,7 @@ func (m DashboardModel) renderBoard(height int, layout boardLayout) string {
 				title = "⏸ " + title
 			}
 
-			header := CurrentTheme.Header.Width(layout.colContentWidth).Render(title)
+			header := m.theme.Header.Width(layout.colContentWidth).Render(title)
 			headerHeight := lipgloss.Height(header)
 
 			// Render Goals
@@ -418,7 +418,7 @@ func (m DashboardModel) renderBoard(height int, layout boardLayout) string {
 			var lines []string
 			var ranges []goalRange
 			if len(sprint.Goals) == 0 {
-				lines = []string{CurrentTheme.Dim.Render("  (empty)")}
+				lines = []string{m.theme.Dim.Render("  (empty)")}
 			} else {
 				ranges = make([]goalRange, len(sprint.Goals))
 				isArchivedColumn := sprint.SprintNumber == -2
@@ -431,7 +431,7 @@ func (m DashboardModel) renderBoard(height int, layout boardLayout) string {
 						}
 						if archiveDate != lastArchiveDate {
 							lastArchiveDate = archiveDate
-							lines = append(lines, CurrentTheme.Dim.Render(" "+archiveDate))
+							lines = append(lines, m.theme.Dim.Render(" "+archiveDate))
 						}
 					}
 					start := len(lines)
@@ -443,24 +443,24 @@ func (m DashboardModel) renderBoard(height int, layout boardLayout) string {
 						tags = util.JSONToTags(*g.Tags)
 						sort.Strings(tags)
 						for _, t := range tags {
-							st := CurrentTheme.TagDefault
+							st := m.theme.TagDefault
 							switch t {
 							case "urgent":
-								st = CurrentTheme.TagUrgent
+								st = m.theme.TagUrgent
 							case "docs":
-								st = CurrentTheme.TagDocs
+								st = m.theme.TagDocs
 							case "blocked":
-								st = CurrentTheme.TagBlocked
+								st = m.theme.TagBlocked
 							case "bug":
-								st = CurrentTheme.TagBug
+								st = m.theme.TagBug
 							case "idea":
-								st = CurrentTheme.TagIdea
+								st = m.theme.TagIdea
 							case "review":
-								st = CurrentTheme.TagReview
+								st = m.theme.TagReview
 							case "focus":
-								st = CurrentTheme.TagFocus
+								st = m.theme.TagFocus
 							case "later":
-								st = CurrentTheme.TagLater
+								st = m.theme.TagLater
 							}
 							tagView += " " + st.Render("#"+t)
 						}
@@ -507,12 +507,12 @@ func (m DashboardModel) renderBoard(height int, layout boardLayout) string {
 					rawLine := fmt.Sprintf("%s[P%d] %s%s #%d", prefix, priority, g.Description, taskSuffix, g.ID)
 					isFocused := realIdx == m.view.focusedColIdx && j == m.view.focusedGoalIdx
 					lead := "  "
-					base := CurrentTheme.Goal
+					base := m.theme.Goal
 					if g.Status == models.GoalStatusCompleted {
-						base = CurrentTheme.CompletedGoal
+						base = m.theme.CompletedGoal
 					}
 					if isFocused {
-						base = CurrentTheme.Focused
+						base = m.theme.Focused
 						lead = "> "
 					}
 
@@ -578,10 +578,10 @@ func (m DashboardModel) renderBoard(height int, layout boardLayout) string {
 			}
 			if visibleHeight > 0 && len(lines) > visibleHeight {
 				if scrollStart > 0 {
-					visibleLines[0] = CurrentTheme.Dim.Render("  ...")
+					visibleLines[0] = m.theme.Dim.Render("  ...")
 				}
 				if scrollStart+visibleHeight < len(lines) {
-					visibleLines[len(visibleLines)-1] = CurrentTheme.Dim.Render("  ...")
+					visibleLines[len(visibleLines)-1] = m.theme.Dim.Render("  ...")
 				}
 			}
 

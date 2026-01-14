@@ -17,7 +17,7 @@ func (d *Database) regenerateRecurringGoal(ctx context.Context, goalID int64) er
 			&g.ID, &g.Description, &g.WorkspaceID, &g.SprintID, &g.Notes, &g.Priority, &g.Effort, &g.Tags, &g.RecurrenceRule,
 		)
 		if err != nil {
-			return wrapGoalErr("recurrence", goalID, err)
+			return wrapErr(EntityGoal, "recurrence", goalID, err)
 		}
 		if g.RecurrenceRule == nil || strings.TrimSpace(*g.RecurrenceRule) == "" {
 			return nil
@@ -41,18 +41,14 @@ func (d *Database) regenerateRecurringGoal(ctx context.Context, goalID int64) er
 			VALUES (?, ?, NULL, 'pending', ?, ?, ?, ?, ?, ?)`,
 			wsID, g.Description, maxRank+1, g.Tags, g.Notes, g.Priority, g.Effort, g.RecurrenceRule,
 		)
-		return wrapGoalErr("recurrence", goalID, err)
+		return wrapErr(EntityGoal, "recurrence", goalID, err)
 	})
 }
 
 func (d *Database) UpdateGoalRecurrence(ctx context.Context, goalID int64, rule string) error {
 	return d.withDBContext(ctx, func(ctx context.Context) error {
-		ruleValue := strings.TrimSpace(rule)
-		value := nullableString("")
-		if ruleValue != "" {
-			value = nullableString(rule)
-		}
+		value := nullableStringIf(rule)
 		_, err := d.DB.ExecContext(ctx, "UPDATE goals SET recurrence_rule = ? WHERE id = ?", value, goalID)
-		return wrapGoalErr("update recurrence", goalID, err)
+		return wrapErr(EntityGoal, "update recurrence", goalID, err)
 	})
 }

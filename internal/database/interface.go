@@ -38,6 +38,8 @@ type WorkspaceRepository interface {
 }
 
 // Repository combines all repository interfaces.
+//
+//go:generate mockgen -source=interface.go -destination=mock_repository_test.go -package=database
 type Repository interface {
 	GoalRepository
 	SprintRepository

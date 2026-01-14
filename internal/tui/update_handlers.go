@@ -56,158 +56,161 @@ func (m DashboardModel) handleTick(msg TickMsg) (DashboardModel, tea.Cmd) {
 	return m, tickCmd()
 }
 
+type KeyHandler func(DashboardModel, string) (DashboardModel, tea.Cmd, bool)
+
+type HandlerChain []KeyHandler
+
+func (chain HandlerChain) Handle(m DashboardModel, key string) (DashboardModel, tea.Cmd, bool) {
+	for _, handler := range chain {
+		if next, cmd, handled := handler(m, key); handled {
+			return next, cmd, true
+		}
+	}
+	return m, nil, false
+}
+
+func wrapKeyHandler(fn func(DashboardModel, string) (DashboardModel, bool)) KeyHandler {
+	return func(m DashboardModel, key string) (DashboardModel, tea.Cmd, bool) {
+		next, handled := fn(m, key)
+		return next, nil, handled
+	}
+}
+
+var normalModeHandlers = HandlerChain{
+	wrapKeyHandler(DashboardModel.handleTabFocus),
+	wrapKeyHandler(DashboardModel.handleArrowKeys),
+	wrapKeyHandler(DashboardModel.handleScrolling),
+	DashboardModel.handleGoalCreate,
+	DashboardModel.handleGoalEdit,
+	DashboardModel.handleGoalDelete,
+	DashboardModel.handleGoalMove,
+	DashboardModel.handleGoalExpandCollapse,
+	DashboardModel.handleGoalTaskTimer,
+	DashboardModel.handleGoalPriority,
+	DashboardModel.handleGoalJournalStart,
+	DashboardModel.handleGoalArchive,
+	DashboardModel.handleGoalDependencyPicker,
+	DashboardModel.handleGoalRecurrencePicker,
+	DashboardModel.handleGoalStatusToggle,
+	DashboardModel.handleGoalTagging,
+	DashboardModel.handleSprintPause,
+	DashboardModel.handleSprintStart,
+	DashboardModel.handleSprintReset,
+	DashboardModel.handleWorkspaceSprintCount,
+	DashboardModel.handleWorkspaceSwitch,
+	DashboardModel.handleWorkspaceCreate,
+	DashboardModel.handleWorkspaceVisibility,
+	DashboardModel.handleWorkspaceViewMode,
+	DashboardModel.handleWorkspaceTheme,
+	DashboardModel.handleWorkspaceSeedImport,
+	DashboardModel.handleWorkspaceReport,
+}
+
+var normalModeKeyHandlers = map[string]KeyHandler{
+	"q":      handleNormalQuit,
+	"ctrl+c": handleNormalQuit,
+	"L":      handleNormalLock,
+	"ctrl+e": handleNormalExport,
+	"/":      handleNormalSearch,
+	"C":      handleNormalClearDB,
+	"p":      handleNormalPassphrase,
+	"<":      handleNormalPrevDay,
+	">":      handleNormalNextDay,
+}
+
 func (m DashboardModel) handleNormalMode(msg tea.KeyMsg) (DashboardModel, tea.Cmd) {
 	key := msg.String()
-	if next, handled := m.handleTabFocus(key); handled {
-		return next, nil
-	}
-	if next, handled := m.handleArrowKeys(key); handled {
-		return next, nil
-	}
-	if next, handled := m.handleScrolling(key); handled {
-		return next, nil
-	}
-	if next, cmd, handled := m.handleGoalCreate(key); handled {
+	if next, cmd, handled := normalModeHandlers.Handle(m, key); handled {
 		return next, cmd
 	}
-	if next, cmd, handled := m.handleGoalEdit(key); handled {
+	if handler, ok := normalModeKeyHandlers[key]; ok {
+		next, cmd, _ := handler(m, key)
 		return next, cmd
-	}
-	if next, cmd, handled := m.handleGoalDelete(key); handled {
-		return next, cmd
-	}
-	if next, cmd, handled := m.handleGoalMove(key); handled {
-		return next, cmd
-	}
-	if next, cmd, handled := m.handleGoalExpandCollapse(key); handled {
-		return next, cmd
-	}
-	if next, cmd, handled := m.handleGoalTaskTimer(key); handled {
-		return next, cmd
-	}
-	if next, cmd, handled := m.handleGoalPriority(key); handled {
-		return next, cmd
-	}
-	if next, cmd, handled := m.handleGoalJournalStart(key); handled {
-		return next, cmd
-	}
-	if next, cmd, handled := m.handleGoalArchive(key); handled {
-		return next, cmd
-	}
-	if next, cmd, handled := m.handleGoalDependencyPicker(key); handled {
-		return next, cmd
-	}
-	if next, cmd, handled := m.handleGoalRecurrencePicker(key); handled {
-		return next, cmd
-	}
-	if next, cmd, handled := m.handleGoalStatusToggle(key); handled {
-		return next, cmd
-	}
-	if next, cmd, handled := m.handleGoalTagging(key); handled {
-		return next, cmd
-	}
-	if next, cmd, handled := m.handleSprintPause(key); handled {
-		return next, cmd
-	}
-	if next, cmd, handled := m.handleSprintStart(key); handled {
-		return next, cmd
-	}
-	if next, cmd, handled := m.handleSprintReset(key); handled {
-		return next, cmd
-	}
-	if next, cmd, handled := m.handleWorkspaceSprintCount(key); handled {
-		return next, cmd
-	}
-	if next, cmd, handled := m.handleWorkspaceSwitch(key); handled {
-		return next, cmd
-	}
-	if next, cmd, handled := m.handleWorkspaceCreate(key); handled {
-		return next, cmd
-	}
-	if next, cmd, handled := m.handleWorkspaceVisibility(key); handled {
-		return next, cmd
-	}
-	if next, cmd, handled := m.handleWorkspaceViewMode(key); handled {
-		return next, cmd
-	}
-	if next, cmd, handled := m.handleWorkspaceTheme(key); handled {
-		return next, cmd
-	}
-	if next, cmd, handled := m.handleWorkspaceSeedImport(key); handled {
-		return next, cmd
-	}
-	if next, cmd, handled := m.handleWorkspaceReport(key); handled {
-		return next, cmd
-	}
-
-	switch key {
-	case "q", "ctrl+c":
-		return m, tea.Quit
-	case "L":
-		if m.security.lock.PassphraseHash == "" {
-			m.security.lock.Message = "Set passphrase to unlock"
-		} else {
-			m.security.lock.Message = "Enter passphrase to unlock"
-		}
-		m.security.lock.Locked = true
-		m.security.lock.PassphraseInput.Reset()
-		m.security.lock.PassphraseInput.Focus()
-		return m, nil
-	case "ctrl+e":
-		path, err := ExportVault(m.ctx, m.db, m.security.lock.PassphraseHash)
-		if err != nil {
-			m.Message = fmt.Sprintf("Export failed: %v", err)
-		} else {
-			m.Message = fmt.Sprintf("Export saved: %s", path)
-		}
-		return m, nil
-	case "/":
-		m.search.Active = true
-		m.search.ArchiveOnly = m.view.focusedColIdx < len(m.sprints) && m.sprints[m.view.focusedColIdx].SprintNumber == -2
-		m.search.Cursor = 0
-		m.search.Input.Focus()
-		if m.search.ArchiveOnly && len(m.workspaces) > 0 {
-			query := util.ParseSearchQuery(m.search.Input.Value())
-			query.Status = []string{"archived"}
-			m.search.Results, m.err = m.db.Search(m.ctx, query, m.workspaces[m.activeWorkspaceIdx].ID)
-		}
-		return m, nil
-	case "C":
-		m.security.confirmingClearDB = true
-		m.security.clearDBNeedsPass = m.security.lock.PassphraseHash != ""
-		m.security.clearDBStatus = ""
-		m.security.lock.PassphraseInput.Reset()
-		m.security.lock.PassphraseInput.Placeholder = "Passphrase"
-		m.security.lock.PassphraseInput.Focus()
-		return m, nil
-	case "p":
-		m.security.changingPassphrase = true
-		m.security.passphraseStatus = ""
-		m.security.passphraseStage = 0
-		m.inputs.passphraseCurrent.Reset()
-		m.inputs.passphraseNew.Reset()
-		m.inputs.passphraseConfirm.Reset()
-		if m.security.lock.PassphraseHash == "" {
-			m.security.passphraseStage = 1
-			m.inputs.passphraseNew.Focus()
-		} else {
-			m.inputs.passphraseCurrent.Focus()
-		}
-		return m, nil
-	case "<":
-		prevID, _, err := m.db.GetAdjacentDay(m.ctx, m.day.ID, -1)
-		if err == nil {
-			m.refreshData(prevID)
-		} else {
-			m.Message = "No previous days recorded."
-		}
-	case ">":
-		nextID, _, err := m.db.GetAdjacentDay(m.ctx, m.day.ID, 1)
-		if err == nil {
-			m.refreshData(nextID)
-		} else {
-			m.Message = "No future days recorded."
-		}
 	}
 	return m, nil
+}
+
+func handleNormalQuit(m DashboardModel, _ string) (DashboardModel, tea.Cmd, bool) {
+	return m, tea.Quit, true
+}
+
+func handleNormalLock(m DashboardModel, _ string) (DashboardModel, tea.Cmd, bool) {
+	if m.security.lock.PassphraseHash == "" {
+		m.security.lock.Message = "Set passphrase to unlock"
+	} else {
+		m.security.lock.Message = "Enter passphrase to unlock"
+	}
+	m.security.lock.Locked = true
+	m.security.lock.PassphraseInput.Reset()
+	m.security.lock.PassphraseInput.Focus()
+	return m, nil, true
+}
+
+func handleNormalExport(m DashboardModel, _ string) (DashboardModel, tea.Cmd, bool) {
+	path, err := ExportVault(m.ctx, m.db, m.security.lock.PassphraseHash)
+	if err != nil {
+		m.Message = fmt.Sprintf("Export failed: %v", err)
+	} else {
+		m.Message = fmt.Sprintf("Export saved: %s", path)
+	}
+	return m, nil, true
+}
+
+func handleNormalSearch(m DashboardModel, _ string) (DashboardModel, tea.Cmd, bool) {
+	m.search.Active = true
+	m.search.ArchiveOnly = m.view.focusedColIdx < len(m.sprints) && m.sprints[m.view.focusedColIdx].SprintNumber == -2
+	m.search.Cursor = 0
+	m.search.Input.Focus()
+	if m.search.ArchiveOnly && len(m.workspaces) > 0 {
+		query := util.ParseSearchQuery(m.search.Input.Value())
+		query.Status = []string{"archived"}
+		m.search.Results, m.err = m.db.Search(m.ctx, query, m.workspaces[m.activeWorkspaceIdx].ID)
+	}
+	return m, nil, true
+}
+
+func handleNormalClearDB(m DashboardModel, _ string) (DashboardModel, tea.Cmd, bool) {
+	m.security.confirmingClearDB = true
+	m.security.clearDBNeedsPass = m.security.lock.PassphraseHash != ""
+	m.security.clearDBStatus = ""
+	m.security.lock.PassphraseInput.Reset()
+	m.security.lock.PassphraseInput.Placeholder = "Passphrase"
+	m.security.lock.PassphraseInput.Focus()
+	return m, nil, true
+}
+
+func handleNormalPassphrase(m DashboardModel, _ string) (DashboardModel, tea.Cmd, bool) {
+	m.security.changingPassphrase = true
+	m.security.passphraseStatus = ""
+	m.security.passphraseStage = 0
+	m.inputs.passphraseCurrent.Reset()
+	m.inputs.passphraseNew.Reset()
+	m.inputs.passphraseConfirm.Reset()
+	if m.security.lock.PassphraseHash == "" {
+		m.security.passphraseStage = 1
+		m.inputs.passphraseNew.Focus()
+	} else {
+		m.inputs.passphraseCurrent.Focus()
+	}
+	return m, nil, true
+}
+
+func handleNormalPrevDay(m DashboardModel, _ string) (DashboardModel, tea.Cmd, bool) {
+	prevID, _, err := m.db.GetAdjacentDay(m.ctx, m.day.ID, -1)
+	if err == nil {
+		m.refreshData(prevID)
+	} else {
+		m.Message = "No previous days recorded."
+	}
+	return m, nil, true
+}
+
+func handleNormalNextDay(m DashboardModel, _ string) (DashboardModel, tea.Cmd, bool) {
+	nextID, _, err := m.db.GetAdjacentDay(m.ctx, m.day.ID, 1)
+	if err == nil {
+		m.refreshData(nextID)
+	} else {
+		m.Message = "No future days recorded."
+	}
+	return m, nil, true
 }

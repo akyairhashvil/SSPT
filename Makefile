@@ -4,3 +4,6 @@ deps-tidy:
 
 deps-check:
 	go list -m -u all
+
+mocks:
+	go generate ./internal/database

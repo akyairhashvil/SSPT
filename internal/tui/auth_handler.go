@@ -10,11 +10,11 @@ import (
 
 // AuthResult represents the outcome of an authentication attempt.
 type AuthResult struct {
-	Success       bool
-	Error         error
-	ShouldRetry   bool
-	Message       string
-	StatusError   string
+	Success        bool
+	Error          error
+	ShouldRetry    bool
+	Message        string
+	StatusError    string
 	PassphraseHash string
 }
 
@@ -36,8 +36,18 @@ func (h *authHandler) ValidatePassphrase(entered, existingHash string) AuthResul
 }
 
 func (h *authHandler) validateExistingPassphrase(entered, existingHash string) AuthResult {
-	if entered != "" && util.HashPassphrase(entered) == existingHash {
-		return AuthResult{Success: true}
+	ok, upgradedHash := util.VerifyPassphraseWithUpgrade(existingHash, entered)
+	if ok {
+		if upgradedHash == "" {
+			return AuthResult{Success: true}
+		}
+		if err := h.db.SetSetting(h.ctx, "passphrase_hash", upgradedHash); err != nil {
+			return AuthResult{
+				Success:     true,
+				StatusError: fmt.Sprintf("Error saving passphrase: %v", err),
+			}
+		}
+		return AuthResult{Success: true, PassphraseHash: upgradedHash}
 	}
 	return AuthResult{
 		Success:     false,
@@ -86,6 +96,13 @@ func (h *authHandler) setupNewPassphrase(entered string) AuthResult {
 	}
 
 	hash := util.HashPassphrase(entered)
+	if hash == "" {
+		return AuthResult{
+			Success:     false,
+			ShouldRetry: false,
+			Message:     "Failed to generate passphrase hash",
+		}
+	}
 	statusError := ""
 	if err := h.db.SetSetting(h.ctx, "passphrase_hash", hash); err != nil {
 		statusError = fmt.Sprintf("Error saving passphrase: %v", err)

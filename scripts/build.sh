@@ -22,23 +22,59 @@ export GOCACHE="$root_dir/.gocache"
 export GOMODCACHE="$root_dir/.gomodcache"
 
 build_tags=()
-if [[ "${1:-}" == "--sqlcipher" ]]; then
-  export CGO_ENABLED=1
-  export CGO_CFLAGS="${CGO_CFLAGS:-} -I/usr/include/sqlcipher"
-  export CGO_LDFLAGS="${CGO_LDFLAGS:-} -lsqlcipher"
-  build_tags+=("sqlcipher" "libsqlite3")
-fi
+run_tests=false
+run_race=false
+skip_build=false
+
+for arg in "$@"; do
+  case "$arg" in
+    --sqlcipher)
+      export CGO_ENABLED=1
+      export CGO_CFLAGS="${CGO_CFLAGS:-} -I/usr/include/sqlcipher"
+      export CGO_LDFLAGS="${CGO_LDFLAGS:-} -lsqlcipher"
+      build_tags+=("sqlcipher" "libsqlite3")
+      ;;
+    --test)
+      run_tests=true
+      ;;
+    --race)
+      run_tests=true
+      run_race=true
+      ;;
+    --test-only)
+      run_tests=true
+      skip_build=true
+      ;;
+    *)
+      echo "Unknown flag: $arg" >&2
+      echo "Usage: $0 [--sqlcipher] [--test] [--race] [--test-only]" >&2
+      exit 2
+      ;;
+  esac
+done
 
 tags_arg=()
 if [[ ${#build_tags[@]} -gt 0 ]]; then
   tags_arg=(-tags "$(IFS=,; echo "${build_tags[*]}")")
 fi
 
-go build "${tags_arg[@]}" -ldflags "\
-  -X github.com/akyairhashvil/SSPT/internal/tui.AppVersion=$num \
-  -X github.com/akyairhashvil/SSPT/internal/tui.GitCommit=$commit \
-  -X github.com/akyairhashvil/SSPT/internal/tui.BuildTime=$build_time" \
-  -o "$root_dir/sspt" \
-  "$root_dir/cmd/app/main.go"
+if [[ "$skip_build" == "false" ]]; then
+  go build "${tags_arg[@]}" -ldflags "\
+    -X github.com/akyairhashvil/SSPT/internal/tui.AppVersion=$num \
+    -X github.com/akyairhashvil/SSPT/internal/tui.GitCommit=$commit \
+    -X github.com/akyairhashvil/SSPT/internal/tui.BuildTime=$build_time" \
+    -o "$root_dir/sspt" \
+    "$root_dir/cmd/app/main.go"
+fi
 
-echo "Built sspt (version $num)"
+if [[ "$run_tests" == "true" ]]; then
+  if [[ "$run_race" == "true" ]]; then
+    go test -race ./...
+  else
+    go test ./...
+  fi
+fi
+
+if [[ "$skip_build" == "false" ]]; then
+  echo "Built sspt (version $num)"
+fi

@@ -68,3 +68,11 @@ func TestHandleNormalModeDayNavigation(t *testing.T) {
 		t.Fatalf("expected next day message")
 	}
 }
+
+func TestHandleNormalModeDispatchesGoalCreate(t *testing.T) {
+	m := setupTestDashboard(t)
+	m, _ = m.handleNormalMode(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+	if !m.modal.creatingGoal {
+		t.Fatalf("expected goal create to be handled by dispatcher")
+	}
+}

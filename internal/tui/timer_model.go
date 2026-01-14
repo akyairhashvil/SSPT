@@ -6,13 +6,13 @@ import (
 	"github.com/akyairhashvil/SSPT/internal/models"
 )
 
-type TimerModel struct {
+type TimerManager struct {
 	ActiveSprint *SprintView
 	ActiveTask   *models.Goal
 	BreakActive  bool
 	BreakStart   time.Time
 }
 
-func NewTimerModel() TimerModel {
-	return TimerModel{}
+func NewTimerManager() TimerManager {
+	return TimerManager{}
 }

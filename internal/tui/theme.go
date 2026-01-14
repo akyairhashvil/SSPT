@@ -182,12 +182,9 @@ func NewFrameStyles() FrameStyles {
 
 var Frames = NewFrameStyles()
 
-// CurrentTheme holds the currently active theme.
-// We initialize it to default to avoid nil pointer dereferences.
-var CurrentTheme = Themes["default"]
-
-func SetTheme(name string) {
+func ResolveTheme(name string) Theme {
 	if t, ok := Themes[name]; ok {
-		CurrentTheme = t
+		return t
 	}
+	return Themes["default"]
 }

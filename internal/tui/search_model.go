@@ -5,7 +5,7 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 )
 
-type SearchModel struct {
+type SearchManager struct {
 	Active      bool
 	Input       textinput.Model
 	Results     []models.Goal
@@ -13,8 +13,8 @@ type SearchModel struct {
 	ArchiveOnly bool
 }
 
-func NewSearchModel(input textinput.Model) SearchModel {
-	return SearchModel{
+func NewSearchManager(input textinput.Model) SearchManager {
+	return SearchManager{
 		Input: input,
 	}
 }

@@ -17,11 +17,11 @@ func (m DashboardModel) renderLockScreen() string {
 	}
 	logo := renderLogo()
 	lockTitle := fmt.Sprintf("%s | %s v%s", title, logo, versionLabel())
-	lockContent.WriteString(CurrentTheme.Focused.Render(lockTitle) + "\n\n")
+	lockContent.WriteString(m.theme.Focused.Render(lockTitle) + "\n\n")
 	if m.security.lock.Message != "" {
-		lockContent.WriteString(CurrentTheme.Dim.Render(m.security.lock.Message) + "\n")
+		lockContent.WriteString(m.theme.Dim.Render(m.security.lock.Message) + "\n")
 	}
-	lockContent.WriteString(CurrentTheme.Focused.Render("> ") + m.security.lock.PassphraseInput.View())
+	lockContent.WriteString(m.theme.Focused.Render("> ") + m.security.lock.PassphraseInput.View())
 
 	lockFrame := Frames.Lock
 	lockBox := lockFrame.Render(lockContent.String())
@@ -32,14 +32,14 @@ func (m DashboardModel) renderJournalPane() string {
 	var journalPane string
 	if m.showAnalytics {
 		var analyticsContent strings.Builder
-		analyticsContent.WriteString(CurrentTheme.Focused.Render("Burndown") + "\n\n")
+		analyticsContent.WriteString(m.theme.Focused.Render("Burndown") + "\n\n")
 		if len(m.workspaces) == 0 {
-			analyticsContent.WriteString(CurrentTheme.Dim.Render("  (no workspaces)\n"))
+			analyticsContent.WriteString(m.theme.Dim.Render("  (no workspaces)\n"))
 		} else {
 			activeWS := m.workspaces[m.activeWorkspaceIdx]
 			sprints, err := m.db.GetSprints(m.ctx, m.day.ID, activeWS.ID)
 			if err != nil {
-				analyticsContent.WriteString(CurrentTheme.Break.Render(fmt.Sprintf("  error loading sprints: %v\n", err)))
+				analyticsContent.WriteString(m.theme.Break.Render(fmt.Sprintf("  error loading sprints: %v\n", err)))
 			} else {
 				var sprintIDs []int64
 				var sprintNums []int
@@ -62,10 +62,10 @@ func (m DashboardModel) renderJournalPane() string {
 					completedAll += completed
 				}
 				if totalAll == 0 || len(sprintIDs) == 0 {
-					analyticsContent.WriteString(CurrentTheme.Dim.Render("  (no sprint tasks)\n"))
+					analyticsContent.WriteString(m.theme.Dim.Render("  (no sprint tasks)\n"))
 				} else {
-					analyticsContent.WriteString(CurrentTheme.Dim.Render(fmt.Sprintf("Total: %d  Completed: %d  Remaining: %d\n\n", totalAll, completedAll, totalAll-completedAll)))
-					analyticsContent.WriteString(CurrentTheme.Dim.Render("Sprint  Done/All  Progress\n"))
+					analyticsContent.WriteString(m.theme.Dim.Render(fmt.Sprintf("Total: %d  Completed: %d  Remaining: %d\n\n", totalAll, completedAll, totalAll-completedAll)))
+					analyticsContent.WriteString(m.theme.Dim.Render("Sprint  Done/All  Progress\n"))
 					chartWidth := m.width - config.AnalyticsChartPadding
 					if chartWidth > config.AnalyticsChartMaxWidth {
 						chartWidth = config.AnalyticsChartMaxWidth
@@ -106,9 +106,9 @@ func (m DashboardModel) renderJournalPane() string {
 		journalPane = analyticsFrame.Width(analyticsWidth).Render(analyticsContent.String())
 	} else if m.security.changingPassphrase {
 		var passContent strings.Builder
-		passContent.WriteString(CurrentTheme.Focused.Render("Change Passphrase") + "\n\n")
+		passContent.WriteString(m.theme.Focused.Render("Change Passphrase") + "\n\n")
 		if m.security.passphraseStatus != "" {
-			passContent.WriteString(CurrentTheme.Break.Render(m.security.passphraseStatus) + "\n")
+			passContent.WriteString(m.theme.Break.Render(m.security.passphraseStatus) + "\n")
 		}
 		currentCursor := "  "
 		newCursor := "  "
@@ -122,12 +122,12 @@ func (m DashboardModel) renderJournalPane() string {
 			confirmCursor = "> "
 		}
 		if m.security.lock.PassphraseHash != "" {
-			passContent.WriteString(CurrentTheme.Dim.Render("Current") + "\n")
+			passContent.WriteString(m.theme.Dim.Render("Current") + "\n")
 			passContent.WriteString(currentCursor + m.inputs.passphraseCurrent.View() + "\n")
 		}
-		passContent.WriteString(CurrentTheme.Dim.Render("New") + "\n")
+		passContent.WriteString(m.theme.Dim.Render("New") + "\n")
 		passContent.WriteString(newCursor + m.inputs.passphraseNew.View() + "\n")
-		passContent.WriteString(CurrentTheme.Dim.Render("Confirm") + "\n")
+		passContent.WriteString(m.theme.Dim.Render("Confirm") + "\n")
 		passContent.WriteString(confirmCursor + m.inputs.passphraseConfirm.View())
 
 		passFrame := Frames.Modal.Padding(0, 1)
@@ -139,11 +139,11 @@ func (m DashboardModel) renderJournalPane() string {
 		journalPane = passFrame.Width(passWidth).Render(passContent.String())
 	} else if m.modal.settingRecurrence {
 		var recContent strings.Builder
-		recContent.WriteString(CurrentTheme.Focused.Render("Recurrence") + "\n")
-		recContent.WriteString(CurrentTheme.Dim.Render("Tab next step | Space toggle | Enter save") + "\n\n")
+		recContent.WriteString(m.theme.Focused.Render("Recurrence") + "\n")
+		recContent.WriteString(m.theme.Dim.Render("Tab next step | Space toggle | Enter save") + "\n\n")
 
 		if m.modal.recurrenceFocus == "mode" {
-			recContent.WriteString(CurrentTheme.Focused.Render("Frequency") + "\n")
+			recContent.WriteString(m.theme.Focused.Render("Frequency") + "\n")
 			for i, opt := range m.modal.recurrenceOptions {
 				cursor := "  "
 				if i == m.modal.recurrenceCursor {
@@ -156,8 +156,8 @@ func (m DashboardModel) renderJournalPane() string {
 				recContent.WriteString(fmt.Sprintf("%s[%s] %s\n", cursor, marker, opt))
 			}
 		} else if m.modal.recurrenceMode == "weekly" {
-			recContent.WriteString(CurrentTheme.Dim.Render("Frequency: weekly") + "\n\n")
-			recContent.WriteString(CurrentTheme.Focused.Render("Weekdays") + "\n")
+			recContent.WriteString(m.theme.Dim.Render("Frequency: weekly") + "\n\n")
+			recContent.WriteString(m.theme.Focused.Render("Weekdays") + "\n")
 			for i, d := range m.modal.weekdayOptions {
 				cursor := "  "
 				if m.modal.recurrenceFocus == "items" && i == m.modal.recurrenceItemCursor {
@@ -170,9 +170,9 @@ func (m DashboardModel) renderJournalPane() string {
 				recContent.WriteString(fmt.Sprintf("%s%s %s\n", cursor, check, d))
 			}
 		} else if m.modal.recurrenceMode == "monthly" {
-			recContent.WriteString(CurrentTheme.Dim.Render("Frequency: monthly") + "\n\n")
+			recContent.WriteString(m.theme.Dim.Render("Frequency: monthly") + "\n\n")
 			if m.modal.recurrenceFocus == "items" {
-				recContent.WriteString(CurrentTheme.Focused.Render("Months") + "\n")
+				recContent.WriteString(m.theme.Focused.Render("Months") + "\n")
 				for i, mo := range m.modal.monthOptions {
 					cursor := "  "
 					if m.modal.recurrenceFocus == "items" && i == m.modal.recurrenceItemCursor {
@@ -185,10 +185,10 @@ func (m DashboardModel) renderJournalPane() string {
 					recContent.WriteString(fmt.Sprintf("%s%s %s\n", cursor, check, mo))
 				}
 			} else if m.modal.recurrenceFocus == "days" {
-				recContent.WriteString(CurrentTheme.Focused.Render("Days") + "\n")
+				recContent.WriteString(m.theme.Focused.Render("Days") + "\n")
 				maxDay := m.monthlyMaxDay()
 				if maxDay <= 0 {
-					recContent.WriteString(CurrentTheme.Dim.Render("  (select month(s) first)"))
+					recContent.WriteString(m.theme.Dim.Render("  (select month(s) first)"))
 				} else {
 					if m.modal.recurrenceDayCursor > maxDay-1 {
 						m.modal.recurrenceDayCursor = maxDay - 1
@@ -240,10 +240,10 @@ func (m DashboardModel) renderJournalPane() string {
 		journalPane = recFrame.Width(recWidth).Render(recContent.String())
 	} else if m.modal.depPicking {
 		var depContent strings.Builder
-		depContent.WriteString(CurrentTheme.Focused.Render("Dependencies") + "\n")
-		depContent.WriteString(CurrentTheme.Dim.Render("Space to toggle, Enter to save") + "\n\n")
+		depContent.WriteString(m.theme.Focused.Render("Dependencies") + "\n")
+		depContent.WriteString(m.theme.Dim.Render("Space to toggle, Enter to save") + "\n\n")
 		if len(m.modal.depOptions) == 0 {
-			depContent.WriteString(CurrentTheme.Dim.Render("  (no tasks)\n"))
+			depContent.WriteString(m.theme.Dim.Render("  (no tasks)\n"))
 		} else {
 			maxLines := m.height / 2
 			if maxLines < 6 {
@@ -258,7 +258,7 @@ func (m DashboardModel) renderJournalPane() string {
 				end = len(m.modal.depOptions)
 			}
 			if start > 0 {
-				depContent.WriteString(CurrentTheme.Dim.Render("  ...\n"))
+				depContent.WriteString(m.theme.Dim.Render("  ...\n"))
 			}
 			for i := start; i < end; i++ {
 				opt := m.modal.depOptions[i]
@@ -273,7 +273,7 @@ func (m DashboardModel) renderJournalPane() string {
 				depContent.WriteString(fmt.Sprintf("%s%s %s\n", cursor, check, opt.Label))
 			}
 			if end < len(m.modal.depOptions) {
-				depContent.WriteString(CurrentTheme.Dim.Render("  ...\n"))
+				depContent.WriteString(m.theme.Dim.Render("  ...\n"))
 			}
 		}
 
@@ -286,10 +286,10 @@ func (m DashboardModel) renderJournalPane() string {
 		journalPane = depFrame.Width(depWidth).Render(depContent.String())
 	} else if m.modal.themePicking {
 		var themeContent strings.Builder
-		themeContent.WriteString(CurrentTheme.Focused.Render("Themes") + "\n")
-		themeContent.WriteString(CurrentTheme.Dim.Render("Use ↑/↓ to select, Enter to apply") + "\n\n")
+		themeContent.WriteString(m.theme.Focused.Render("Themes") + "\n")
+		themeContent.WriteString(m.theme.Dim.Render("Use ↑/↓ to select, Enter to apply") + "\n\n")
 		if len(m.modal.themeNames) == 0 {
-			themeContent.WriteString(CurrentTheme.Dim.Render("  (no themes)\n"))
+			themeContent.WriteString(m.theme.Dim.Render("  (no themes)\n"))
 		} else {
 			for i, name := range m.modal.themeNames {
 				cursor := "  "
@@ -308,8 +308,8 @@ func (m DashboardModel) renderJournalPane() string {
 		journalPane = themeFrame.Width(themeWidth).Render(themeContent.String())
 	} else if m.modal.tagging {
 		var tagContent strings.Builder
-		tagContent.WriteString(CurrentTheme.Focused.Render("Tags") + "\n")
-		tagContent.WriteString(CurrentTheme.Dim.Render("Use ↑/↓ to select, Tab to toggle, Enter to save") + "\n\n")
+		tagContent.WriteString(m.theme.Focused.Render("Tags") + "\n")
+		tagContent.WriteString(m.theme.Dim.Render("Use ↑/↓ to select, Tab to toggle, Enter to save") + "\n\n")
 		for i, tag := range m.modal.defaultTags {
 			cursor := "  "
 			if i == m.modal.tagCursor {
@@ -322,10 +322,10 @@ func (m DashboardModel) renderJournalPane() string {
 			tagContent.WriteString(fmt.Sprintf("%s%s %s\n", cursor, check, tag))
 		}
 		if len(m.modal.defaultTags) == 0 {
-			tagContent.WriteString(CurrentTheme.Dim.Render("  (no default tags)\n"))
+			tagContent.WriteString(m.theme.Dim.Render("  (no default tags)\n"))
 		}
-		tagContent.WriteString("\n" + CurrentTheme.Focused.Render("Custom") + "\n")
-		tagContent.WriteString(CurrentTheme.Focused.Render("> ") + m.inputs.tagInput.View())
+		tagContent.WriteString("\n" + m.theme.Focused.Render("Custom") + "\n")
+		tagContent.WriteString(m.theme.Focused.Render("> ") + m.inputs.tagInput.View())
 
 		tagFrame := Frames.Modal.Padding(0, 1)
 		tagExtraWidth := lipgloss.Width(tagFrame.Render(""))
@@ -340,10 +340,10 @@ func (m DashboardModel) renderJournalPane() string {
 		if m.search.ArchiveOnly {
 			header = "Search Archived"
 		}
-		searchContent.WriteString(CurrentTheme.Focused.Render(header) + "\n")
-		searchContent.WriteString(CurrentTheme.Focused.Render("/ ") + m.search.Input.View() + "\n\n")
+		searchContent.WriteString(m.theme.Focused.Render(header) + "\n")
+		searchContent.WriteString(m.theme.Focused.Render("/ ") + m.search.Input.View() + "\n\n")
 		if len(m.search.Results) == 0 {
-			searchContent.WriteString(CurrentTheme.Dim.Render("  (no results)"))
+			searchContent.WriteString(m.theme.Dim.Render("  (no results)"))
 		} else {
 			for i, g := range m.search.Results {
 				status := g.Status
@@ -351,12 +351,12 @@ func (m DashboardModel) renderJournalPane() string {
 					status = "pending"
 				}
 				prefix := "  "
-				style := CurrentTheme.Goal
+				style := m.theme.Goal
 				if i == m.search.Cursor {
 					prefix = "> "
-					style = CurrentTheme.Focused
+					style = m.theme.Focused
 				}
-				line := fmt.Sprintf("%s %s", CurrentTheme.Dim.Render(string(status)), g.Description)
+				line := fmt.Sprintf("%s %s", m.theme.Dim.Render(string(status)), g.Description)
 				searchContent.WriteString(prefix + style.Render(line) + "\n")
 			}
 		}
@@ -369,7 +369,7 @@ func (m DashboardModel) renderJournalPane() string {
 		journalPane = journalFrame.Width(journalWidth).Render(searchContent.String())
 	} else if len(m.journalEntries) > 0 || m.modal.journaling {
 		var journalContent strings.Builder
-		journalContent.WriteString(CurrentTheme.Focused.Render("Journal") + "\n\n")
+		journalContent.WriteString(m.theme.Focused.Render("Journal") + "\n\n")
 		start := len(m.journalEntries) - 3
 		if start < 0 {
 			start = 0
@@ -393,13 +393,13 @@ func (m DashboardModel) renderJournalPane() string {
 				labelStr = fmt.Sprintf("[%s] ", strings.Join(labels, "|"))
 			}
 			line := fmt.Sprintf("%s %s%s",
-				CurrentTheme.Dim.Render(entry.CreatedAt.Format("15:04")),
-				CurrentTheme.Highlight.Render(labelStr),
+				m.theme.Dim.Render(entry.CreatedAt.Format("15:04")),
+				m.theme.Highlight.Render(labelStr),
 				entry.Content)
 			journalContent.WriteString(line + "\n")
 		}
 		if m.modal.journaling {
-			journalContent.WriteString("\n" + CurrentTheme.Focused.Render("> ") + m.inputs.journalInput.View())
+			journalContent.WriteString("\n" + m.theme.Focused.Render("> ") + m.inputs.journalInput.View())
 		}
 		journalFrame := Frames.Modal.Padding(0, 1)
 		journalExtraWidth := lipgloss.Width(journalFrame.Render(""))
