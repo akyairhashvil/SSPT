@@ -10,8 +10,8 @@ require (
 	github.com/go-pdf/fpdf v0.9.0
 	github.com/golang/mock v1.6.0
 	github.com/mattn/go-sqlite3 v1.14.32
-	golang.org/x/crypto v0.42.0
-	golang.org/x/term v0.38.0
+	golang.org/x/crypto v0.47.0
+	golang.org/x/term v0.39.0
 )
 
 require (
@@ -31,8 +31,8 @@ require (
 	github.com/muesli/termenv v0.16.0 // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect
 	github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e // indirect
-	golang.org/x/sys v0.39.0 // indirect
-	golang.org/x/text v0.29.0 // indirect
+	golang.org/x/sys v0.40.0 // indirect
+	golang.org/x/text v0.33.0 // indirect
 )
 
 replace github.com/mattn/go-sqlite3 => ./third_party/go-sqlite3
